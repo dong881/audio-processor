@@ -1,0 +1,19 @@
+# Web 服務相關
+flask==2.3.3
+gunicorn==21.2.0
+python-dotenv==1.0.0
+requests==2.31.0
+
+# Google API 相關
+google-api-python-client==2.97.0
+google-auth==2.22.0
+google-auth-oauthlib==1.0.0
+google-generativeai==0.3.1
+
+# 音訊處理相關
+openai-whisper==20231117  # 使用官方 whispher
+torch==2.0.1  # 與 CUDA 不依賴的版本，適合 CPU 環境
+torchaudio==2.0.2
+pyannote.audio==3.1.1
+ffmpeg-python==0.2.0  # 提供 ffmpeg 的 Python 綁定
+soundfile==0.12.1

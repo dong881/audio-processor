@@ -1,0 +1,20 @@
+# Flask 設定
+PORT=5000
+FLASK_DEBUG=false
+
+# Google API 設定
+USE_SERVICE_ACCOUNT=true
+GOOGLE_SA_JSON_PATH=/app/credentials/service-account.json
+# 或者使用 OAuth (二選一)
+# USE_SERVICE_ACCOUNT=false
+# GOOGLE_CREDS_JSON_PATH=/app/credentials/oauth-credentials.json
+
+# Gemini API 設定
+GEMINI_API_KEY=your_gemini_api_key
+
+# Hugging Face 設定 (用於 pyannote.audio)
+HF_TOKEN=your_huggingface_token
+
+# Notion API 設定
+NOTION_TOKEN=your_notion_integration_token
+NOTION_DATABASE_ID=your_notion_database_id
