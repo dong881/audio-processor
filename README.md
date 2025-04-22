@@ -122,18 +122,12 @@ curl -X POST http://localhost:5000/process \
 
 ## Updating the Application
 
-If you modify the Python code (`app.py` or other dependencies):
+If you modify the Python code (`app.py` or other dependencies), rebuild the image and restart the container with a single command:
 
-1.  **Rebuild the Docker image:**
-    ```bash
-    docker-compose build audio-processor
-    ```
-
-2.  **Restart the container:**
-    ```bash
-    docker-compose up -d
-    ```
-    Docker Compose will detect the updated image and recreate the container.
+```bash
+docker-compose up -d --build
+```
+Docker Compose will rebuild the image if necessary and then recreate the container using the updated image.
 
 ## Health Check
 

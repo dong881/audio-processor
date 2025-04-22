@@ -10,17 +10,25 @@ RUN apt-get update && apt-get install -y \
 # 設定工作目錄
 WORKDIR /app
 
+# 建立非 root 用戶和群組
+RUN groupadd -r appuser && useradd --no-log-init -r -g appuser appuser
+
 # 複製 requirements.txt 檔案
 COPY requirements.txt ./
 
-# 安裝 Python 依賴
+# 升級 pip 並安裝 Python 依賴
+RUN pip install --no-cache-dir --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 複製其餘的檔案
 COPY . .
 
-# 建立結構目錄
-RUN mkdir -p /app/credentials
+# 更改 /app 目錄的擁有者為非 root 用戶
+# 同時建立 credentials 目錄並設定權限
+RUN mkdir -p /app/credentials && chown -R appuser:appuser /app
+
+# 切換到非 root 用戶
+USER appuser
 
 # 暴露端口
 EXPOSE 5000
