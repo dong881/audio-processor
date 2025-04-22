@@ -1,150 +1,151 @@
-# 語音處理系統安裝指南
+# Audio Processing API
 
-本指南將幫助你在 GCP VM (或其他雲端服務) 上設置語音處理系統。
+This Flask application processes audio files from Google Drive, performs speech-to-text transcription and speaker diarization, attempts to identify speakers, generates a summary and to-do list using Google Gemini, optionally incorporates text from a PDF attachment, and creates a summary page in Notion.
 
-## 前置需求
+## Features
 
-- Ubuntu Server (推薦 20.04 LTS)
-- 足夠的儲存空間 (至少 10GB)
-- 至少 4GB RAM
+*   Downloads audio files from Google Drive.
+*   Converts various audio formats to WAV (16kHz, mono).
+*   Performs speech-to-text using Whisper.
+*   Performs speaker diarization using Pyannote Audio.
+*   Attempts to identify speaker names (e.g., `SPEAKER_00`) based on conversation context using Google Gemini.
+*   Generates a meeting title, summary, and to-do list using Google Gemini.
+*   Optionally extracts text from a PDF attachment (via Google Drive) to provide more context to Gemini for summarization.
+*   Creates a structured page in a specified Notion database with the title, summary, to-dos, and full transcript (without timestamps, using identified speaker names).
 
-## 安裝步驟
+## Prerequisites
 
-### 1. 安裝基本依賴
+*   Python 3.8+
+*   Docker & Docker Compose
+*   Google Cloud Project with Drive API enabled
+    *   OAuth 2.0 Credentials (`credentials.json`) OR Service Account Key (`service_account.json`)
+*   Google Gemini API Key
+*   Hugging Face Hub Token (for Pyannote)
+*   Notion Integration Token and Database ID
 
-```bash
-# 更新套件管理器
-sudo apt update
-sudo apt upgrade -y
+## Setup
 
-# 安裝必要系統套件
-sudo apt install -y \
-    python3-pip \
-    python3-venv \
-    ffmpeg \
-    git \
-    curl \
-    docker.io \
-    docker-compose
+1.  **Clone the repository:**
+    ```bash
+    git clone <your-repo-url>
+    cd audio-processor
+    ```
+2.  **Create `.env` file:**
+    Copy `.env.example` to `.env` and fill in your credentials and IDs:
+    ```env
+    # Google Drive API
+    # Option 1: OAuth (set USE_SERVICE_ACCOUNT=false)
+    GOOGLE_CREDS_JSON_PATH=./credentials.json
+    # Option 2: Service Account (set USE_SERVICE_ACCOUNT=true)
+    GOOGLE_SA_JSON_PATH=./service_account.json
+    USE_SERVICE_ACCOUNT=false # or true
 
-# 啟用 Docker 服務
-sudo systemctl enable docker
-sudo systemctl start docker
+    # Google Gemini API
+    GEMINI_API_KEY=YOUR_GEMINI_API_KEY
 
-# 將當前使用者加入 docker 群組 (需登出再登入生效)
-sudo usermod -aG docker $USER
+    # Hugging Face Hub (for Pyannote)
+    HF_TOKEN=YOUR_HUGGINGFACE_TOKEN
+
+    # Notion API
+    NOTION_TOKEN=YOUR_NOTION_INTEGRATION_TOKEN
+    NOTION_DATABASE_ID=YOUR_NOTION_DATABASE_ID
+
+    # Flask Settings (Optional)
+    PORT=5000
+    FLASK_DEBUG=false
+    ```
+3.  **Place Credentials:**
+    *   If using OAuth, place your `credentials.json` file in the project root.
+    *   If using a Service Account, place your key file (e.g., `service_account.json`) in the project root and update `GOOGLE_SA_JSON_PATH` in `.env`.
+4.  **Build and Run with Docker Compose:**
+    ```bash
+    docker compose build
+    docker compose up -d
+    ```
+    *(This assumes your service in `docker-compose.yml` is named `app` or similar and includes installing dependencies like `PyPDF2`)*
+
+## API Usage
+
+Send a POST request to the `/process` endpoint.
+
+**Endpoint:** `POST /process`
+
+**Headers:**
+*   `Content-Type: application/json`
+
+**Body (JSON):**
+```json
+{
+  "file_id": "YOUR_GOOGLE_DRIVE_AUDIO_FILE_ID",
+  "attachment_file_id": "OPTIONAL_GOOGLE_DRIVE_PDF_FILE_ID"
+}
 ```
+*   `file_id`: (Required) The ID of the audio file in Google Drive.
+*   `attachment_file_id`: (Optional) The ID of a PDF file in Google Drive to include as context for summarization.
 
-### 2. 下載專案
-
+**Example Request (using curl):**
 ```bash
-# 建立專案目錄
-mkdir -p ~/audio-processor
-cd ~/audio-processor
-
-# 下載專案檔案 (替換成實際的下載方式)
-# 例如: 從 GitHub 複製
-# git clone https://github.com/yourusername/audio-processor.git .
-
-# 或手動建立文件
-# 將 app.py, requirements.txt, Dockerfile, docker-compose.yml 複製到此目錄
-```
-
-### 3. 設定認證
-
-```bash
-# 建立認證目錄
-mkdir -p credentials
-
-# 準備必要的認證檔案
-# 1. Google API 服務帳號金鑰 (service-account.json)
-# 2. Google OAuth 認證 (oauth-credentials.json)
-# 3. 其他必要的 API 金鑰
-
-# 複製 .env.example 為 .env
-cp .env.example .env
-
-# 編輯 .env 檔案，填入你的 API 金鑰
-nano .env
-```
-
-### 4. 取得必要的 API 認證
-
-#### Google 服務帳號 (Google Drive API)
-
-1. 前往 [Google Cloud Console](https://console.cloud.google.com/)
-2. 建立專案或選擇現有專案
-3. 啟用 Google Drive API
-4. 建立服務帳號並下載金鑰 (JSON 格式)
-5. 將金鑰移至 `credentials/service-account.json`
-
-#### Hugging Face 權杖 (pyannote.audio)
-
-1. 註冊/登入 [Hugging Face](https://huggingface.co/)
-2. 前往個人設定頁面，建立新的 API 權杖
-3. 將權杖複製到 `.env` 檔案中的 `HF_TOKEN` 欄位
-
-#### Gemini API 金鑰
-
-1. 前往 [Google AI Studio](https://makersuite.google.com/)
-2. 取得 API 金鑰
-3. 將金鑰複製到 `.env` 檔案中的 `GEMINI_API_KEY` 欄位
-
-#### Notion API 整合
-
-1. 前往 [Notion Integrations](https://www.notion.so/my-integrations)
-2. 建立新的整合
-3. 將整合權杖複製到 `.env` 檔案中的 `NOTION_TOKEN` 欄位
-4. 在 Notion 中建立資料庫，並將資料庫 ID 複製到 `NOTION_DATABASE_ID` 欄位
-5. 記得將你的 Notion 整合添加到資料庫的共享設定中
-
-### 5. 使用 Docker 啟動服務
-
-```bash
-# 建置和啟動 Docker 容器
-docker-compose up -d
-
-# 檢查服務日誌
-docker-compose logs -f
-```
-
-### 6. 測試 API
-
-```bash
-# 健康檢查
-curl http://localhost:5000/health
-
-# 處理音檔 (替換成實際的 Google Drive 檔案 ID)
 curl -X POST http://localhost:5000/process \
-  -H "Content-Type: application/json" \
-  -d '{"file_id": "YOUR_GOOGLE_DRIVE_FILE_ID"}'
+-H "Content-Type: application/json" \
+-d '{
+      "file_id": "YOUR_AUDIO_FILE_ID",
+      "attachment_file_id": "YOUR_PDF_FILE_ID"
+    }'
 ```
 
-## 生產環境建議
-
-1. **設定 HTTPS**: 使用 Nginx 或 Cloudflare 代理流量並啟用 SSL
-2. **設定防火牆**: 僅開放必要的端口 (如 80, 443)
-3. **監控**: 設定基本的系統監控 (如 Prometheus + Grafana)
-4. **自動重啟**: 確保服務在重新啟動後自動執行
-
-## 疑難排解
-
-### FFmpeg 錯誤
-如果看到 FFmpeg 相關錯誤，確認已正確安裝:
-```bash
-sudo apt install -y ffmpeg
-ffmpeg -version
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "notion_page_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "notion_page_url": "https://www.notion.so/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "title": "Generated Meeting Title",
+  "summary": "Generated meeting summary...",
+  "todos": [
+    "Generated Todo 1",
+    "Generated Todo 2"
+  ],
+  "identified_speakers": {
+      "SPEAKER_00": "Alice",
+      "SPEAKER_01": "Bob"
+  }
+}
 ```
 
-### 記憶體不足
-如果收到記憶體錯誤，增加虛擬記憶體:
-```bash
-sudo fallocate -l 4G /swapfile
-sudo chmod 600 /swapfile
-sudo mkswap /swapfile
-sudo swapon /swapfile
-echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+**Error Response (4xx or 5xx):**
+```json
+{
+  "success": false,
+  "error": "Error message describing the issue"
+}
 ```
 
-### GPU 相關問題
-注意: 本系統設計為在 CPU 環境運行。如需使用 GPU，必須修改 `requirements.txt` 中的 torch 版本，並調整 Dockerfile。
+## Updating the Application
+
+If you modify the Python code (`app.py` or other dependencies):
+
+1.  **Rebuild the Docker image:**
+    ```bash
+    docker compose build <service_name>
+    ```
+    (Replace `<service_name>` with the name of the service defined in your `docker-compose.yml`, e.g., `app`)
+
+2.  **Restart the container:**
+    ```bash
+    docker compose up -d
+    ```
+    Docker Compose will detect the updated image and recreate the container.
+
+## Health Check
+
+A simple health check endpoint is available:
+
+**Endpoint:** `GET /health`
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "timestamp": "YYYY-MM-DDTHH:MM:SS.ffffff"
+}
+```
