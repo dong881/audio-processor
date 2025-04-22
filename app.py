@@ -82,8 +82,9 @@ class AudioProcessor:
         
         # 載入 Whisper 模型 (如果尚未載入)
         if self.whisper_model is None:
-            logging.info("- 載入 Whisper 模型...")
-            self.whisper_model = whisper.load_model("base")
+            logging.info("- 載入 Whisper 模型 (medium)...")
+            # Use a larger model for potentially better accuracy
+            self.whisper_model = whisper.load_model("medium")
             logging.info("- Whisper 模型載入完成")
         
         # 載入 Pyannote 模型 (如果尚未載入)
