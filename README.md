@@ -59,10 +59,10 @@ This Flask application processes audio files from Google Drive, performs speech-
     *   If using a Service Account, place your key file (e.g., `service_account.json`) in the project root and update `GOOGLE_SA_JSON_PATH` in `.env`.
 4.  **Build and Run with Docker Compose:**
     ```bash
-    docker compose build
-    docker compose up -d
+    docker-compose build audio-processor
+    docker-compose up -d
     ```
-    *(This assumes your service in `docker-compose.yml` is named `app` or similar and includes installing dependencies like `PyPDF2`)*
+    *(This assumes your service in `docker-compose.yml` is named `audio-processor` and includes installing dependencies like `PyPDF2`)*
 
 ## API Usage
 
@@ -126,13 +126,12 @@ If you modify the Python code (`app.py` or other dependencies):
 
 1.  **Rebuild the Docker image:**
     ```bash
-    docker compose build <service_name>
+    docker-compose build audio-processor
     ```
-    (Replace `<service_name>` with the name of the service defined in your `docker-compose.yml`, e.g., `app`)
 
 2.  **Restart the container:**
     ```bash
-    docker compose up -d
+    docker-compose up -d
     ```
     Docker Compose will detect the updated image and recreate the container.
 

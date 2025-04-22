@@ -10,16 +10,17 @@ RUN apt-get update && apt-get install -y \
 # 設定工作目錄
 WORKDIR /app
 
-# 複製需要的檔案
-COPY requirements.txt .
-COPY app.py .
-COPY .env .
-
-# 建立結構目錄
-RUN mkdir -p /app/credentials
+# 複製 requirements.txt 檔案
+COPY requirements.txt ./
 
 # 安裝 Python 依賴
 RUN pip install --no-cache-dir -r requirements.txt
+
+# 複製其餘的檔案
+COPY . .
+
+# 建立結構目錄
+RUN mkdir -p /app/credentials
 
 # 暴露端口
 EXPOSE 5000
