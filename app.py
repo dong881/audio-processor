@@ -5,7 +5,8 @@ import shutil
 import subprocess
 import io
 import json
-import re  # Added for cleaning JSON
+import re
+import time  # Add time for retry delay
 from datetime import datetime
 from typing import Dict, List, Tuple, Any, Optional
 
@@ -290,125 +291,107 @@ class AudioProcessor:
             return {spk: spk for spk in original_speakers}
 
     def generate_summary(self, transcript: str, attachment_text: Optional[str] = None) -> Dict[str, str]:
-        """使用 Gemini 生成摘要和待辦事項，可選加入附件內容"""
+        """使用 Gemini 生成摘要和待辦事項，包含重試機制和更嚴格的提示"""
         print("🔄 生成摘要與待辦事項...")
-        
+
         # 基礎提示
         prompt_parts = [
-            "你是一位專業的會議記錄員，以下是一段會議的語音轉文字記錄",
+            "你是一位專業的會議記錄員。根據以下提供的語音記錄",
         ]
-        
+
         # 如果有附件內容，加入提示
         if attachment_text:
-            prompt_parts.append("以及一份相關的附加文件內容")
-        
+            prompt_parts.append("和附加文件內容")
+
         prompt_parts.extend([
             f"""
-            請幫我：
-            1. 撰寫一段不超過300字的摘要
-            2. 列出不超過5項的重要待辦事項 (To-Do)
-            3. 給這個會議一個簡短但描述性強的標題
+            ，請執行以下任務：
+            1. 撰寫一段不超過300字的摘要。
+            2. 列出不超過5項的重要待辦事項 (To-Do)。
+            3. 給這個會議一個簡短但描述性強的標題。
 
             語音記錄：
             {transcript}
             """
         ])
-        
+
         # 加入附件內容到提示
         if attachment_text:
             prompt_parts.append(f"\n附加文件內容：\n{attachment_text}\n")
-        
-        # 結束提示
+
+        # 結束提示 - 強調 JSON Only
         prompt_parts.append(
             """
-            請以下列JSON格式回覆：
-            {
+            **重要指示：** 你的回覆 **必須** 僅包含一個有效的 JSON 物件，其結構如下所示。
+            **絕對不要** 在 JSON 物件前後包含任何其他文字、註解、說明或 markdown 標記 (例如 ```json ... ```)。
+
+            ```json
+            {{
                 "title": "會議標題",
                 "summary": "會議摘要...",
                 "todos": ["待辦事項1", "待辦事項2", ...]
-            }
-            只回覆JSON，不要有其他文字或解釋。
+            }}
+            ```
             """
         )
-        
+
         full_prompt = "".join(prompt_parts)
-        
-        try:
-            model = genai.GenerativeModel('gemini-pro')
-            response = model.generate_content(full_prompt)
-            
-            # 嘗試提取和清理 JSON
-            match = re.search(r"```json\s*(\{.*?\})\s*```", response.text, re.DOTALL)
-            if match:
-                json_text = match.group(1)
-            else:
-                json_text = response.text.strip()
-                if not json_text.startswith('{') or not json_text.endswith('}'):
-                    raise ValueError("回應不是預期的 JSON 格式")
-            
-            # 解析 JSON 回應
-            summary_data = json.loads(json_text)
-            
-            # 基本驗證
-            if not all(k in summary_data for k in ["title", "summary", "todos"]):
-                raise ValueError("缺少必要的 JSON 鍵")
-            if not isinstance(summary_data["todos"], list):
-                raise ValueError("'todos' 必須是一個列表")
-            
-            print("✅ 摘要生成完成")
-            return summary_data
-        except Exception as e:
-            print(f"❌ 摘要生成失敗: {str(e)}")
-            return {
-                "title": "會議記錄 (摘要生成失敗)",
-                "summary": "無法生成摘要，請查看原始記錄。",
-                "todos": ["檢閱會議記錄並手動整理重點"]
-            }
+        max_retries = 3
+        retry_delay = 2  # seconds
 
-    def download_and_extract_text(self, file_id: str) -> Tuple[Optional[str], Optional[str]]:
-        """下載 Google Drive 檔案並提取文字 (目前僅支援 PDF)"""
-        print(f"🔄 下載並提取附件文字 (ID: {file_id})...")
-        temp_dir = None
-        try:
-            # 取得檔案資訊
-            file_meta = self.drive_service.files().get(
-                fileId=file_id, fields="name,mimeType"
-            ).execute()
-            mime_type = file_meta.get('mimeType', '')
-            filename = file_meta.get('name', f'attachment_{file_id}')
-            print(f"- 附件名稱: {filename}")
-            print(f"- MIME類型: {mime_type}")
-
-            # 目前僅支援 PDF
-            if 'pdf' not in mime_type.lower():
-                print(f"⚠️ 不支援的附件類型: {mime_type}。跳過文字提取。")
-                return None, None
-
-            if PyPDF2 is None:
-                print("⚠️ PyPDF2 未安裝，無法提取 PDF 文字。")
-                return None, None
-
-            # 下載檔案
-            local_path, temp_dir = self.download_from_drive(file_id)
-
-            # 提取 PDF 文字
-            text = ""
+        for attempt in range(max_retries):
+            print(f"- 嘗試生成摘要 (第 {attempt + 1}/{max_retries} 次)...")
             try:
-                with open(local_path, 'rb') as f:
-                    reader = PyPDF2.PdfReader(f)
-                    for page in reader.pages:
-                        text += page.extract_text() or ""
-                print(f"✅ PDF 文字提取完成 (共 {len(text)} 字元)")
-                return text, temp_dir
-            except Exception as pdf_err:
-                print(f"❌ PDF 文字提取失敗: {str(pdf_err)}")
-                return None, temp_dir
+                model = genai.GenerativeModel('gemini-pro')
+                response = model.generate_content(full_prompt)
+                raw_text = response.text
 
-        except Exception as e:
-            print(f"❌ 附件處理失敗: {str(e)}")
-            if temp_dir and os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
-            return None, None
+                print(f"- Gemini Raw Response (Attempt {attempt+1}):\n{raw_text[:500]}...")  # Log beginning of response
+
+                # 更加努力地清理和解析 JSON
+                # 1. 去除首尾空白
+                cleaned_text = raw_text.strip()
+
+                # 2. 嘗試去除可能的 markdown 區塊標記
+                match = re.search(r"```json\s*(\{.*?\})\s*```", cleaned_text, re.DOTALL)
+                if match:
+                    json_text = match.group(1)
+                else:
+                    # 如果沒有找到 markdown 標記，假設整個 cleaned_text 就是 JSON
+                    # 但要確保它至少看起來像 JSON
+                    if cleaned_text.startswith('{') and cleaned_text.endswith('}'):
+                        json_text = cleaned_text
+                    else:
+                        # 如果看起來不像 JSON，則認為此次嘗試失敗
+                        raise ValueError("回應內容不是預期的 JSON 物件格式")
+
+                # 3. 解析 JSON
+                summary_data = json.loads(json_text)
+
+                # 4. 基本驗證
+                if not all(k in summary_data for k in ["title", "summary", "todos"]):
+                    raise ValueError("JSON 物件缺少必要的鍵 (title, summary, todos)")
+                if not isinstance(summary_data["todos"], list):
+                    raise ValueError("'todos' 鍵的值必須是一個列表")
+
+                print("✅ 摘要生成成功")
+                return summary_data  # 成功，跳出循環並返回結果
+
+            except Exception as e:
+                print(f"❌ 第 {attempt + 1} 次摘要生成/解析失敗: {str(e)}")
+                if attempt < max_retries - 1:
+                    print(f"   將在 {retry_delay} 秒後重試...")
+                    time.sleep(retry_delay)
+                else:
+                    print("❌ 已達最大重試次數，摘要生成失敗。")
+
+        # 如果所有重試都失敗，返回預設資料
+        print("❌ 所有摘要生成嘗試失敗，返回預設內容。")
+        return {
+            "title": "會議記錄 (摘要生成失敗)",
+            "summary": "無法生成摘要，請查看原始記錄。",
+            "todos": ["檢閱會議記錄並手動整理重點"]
+        }
 
     def create_notion_page(self, title: str, summary: str, todos: List[str], segments: List[Dict[str, Any]]) -> str:
         """建立 Notion 頁面 (移除逐字稿時間戳)"""
