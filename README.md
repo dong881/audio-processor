@@ -164,3 +164,19 @@ A simple health check endpoint is available:
   "timestamp": "YYYY-MM-DDTHH:MM:SS.ffffff"
 }
 ```
+
+## Cleaning Up Unused Docker Images
+
+Each time you rebuild the image after making changes (`docker-compose build audio-processor`), Docker keeps the old, unused image layers. Over time, these can consume significant disk space.
+
+To remove all dangling (unused and untagged) images, you can use the `docker image prune` command.
+
+```bash
+# Remove all dangling images
+docker image prune
+
+# To remove dangling images without prompting for confirmation
+docker image prune -f
+```
+
+**Caution:** This command removes images that are not associated with any container. Ensure you don't have other projects relying on these dangling images before running it. It's generally safe to run if you only use Docker for this project or manage your images carefully.
