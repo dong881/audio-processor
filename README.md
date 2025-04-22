@@ -61,6 +61,9 @@ mkdir -p credentials
 # 2. Google OAuth 認證 (oauth-credentials.json)
 # 3. 其他必要的 API 金鑰
 
+# 複製 .env.example 為 .env
+cp .env.example .env
+
 # 編輯 .env 檔案，填入你的 API 金鑰
 nano .env
 ```
