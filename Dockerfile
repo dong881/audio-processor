@@ -10,8 +10,8 @@ RUN apt-get update && apt-get install -y \
 # 設定工作目錄
 WORKDIR /app
 
-# 建立非 root 用戶和群組
-RUN groupadd -r appuser && useradd --no-log-init -r -g appuser appuser
+# 建立非 root 用戶和群組，並指定 home 目錄
+RUN groupadd -r appuser && useradd --no-log-init -r -g appuser -d /home/appuser -m appuser
 
 # 複製 requirements.txt 檔案
 COPY requirements.txt ./
@@ -24,8 +24,12 @@ RUN pip install --no-cache-dir -r requirements.txt --root-user-action=ignore
 COPY . .
 
 # 更改 /app 目錄的擁有者為非 root 用戶
-# 同時建立 credentials 目錄並設定權限
-RUN mkdir -p /app/credentials && chown -R appuser:appuser /app
+# 同時建立 credentials 和 cache 目錄並設定權限
+# 確保 /home/appuser 也屬於 appuser
+RUN mkdir -p /app/credentials \
+    && mkdir -p /app/.cache \
+    && chown -R appuser:appuser /app \
+    && chown -R appuser:appuser /home/appuser
 
 # 切換到非 root 用戶
 USER appuser

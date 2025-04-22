@@ -8,15 +8,19 @@ This Flask application processes audio files from Google Drive, performs speech-
 *   Converts various audio formats to WAV (16kHz, mono).
 *   Performs speech-to-text using Whisper.
 *   Performs speaker diarization using Pyannote Audio.
-*   Attempts to identify speaker names (e.g., `SPEAKER_00`) based on conversation context using Google Gemini.
-*   Generates a meeting title, summary, and to-do list using Google Gemini.
+*   Attempts to identify speaker names (e.g., `SPEAKER_00`) based on conversation context using Google Gemini (`gemini-1.5-flash-latest`).
+*   Generates a meeting title, summary, and to-do list using Google Gemini (`gemini-1.5-flash-latest`).
 *   Optionally extracts text from a PDF attachment (via Google Drive) to provide more context to Gemini for summarization.
 *   Creates a structured page in a specified Notion database with the title, summary, to-dos, and full transcript (without timestamps, using identified speaker names).
 
+## Detailed Workflow
+
+For a detailed step-by-step explanation of the application's internal workflow and function interactions, please see the [**Process Details Document**](./PROCESS_DETAILS.md).
+
 ## Prerequisites
 
-*   Python 3.8+
-*   Docker & Docker Compose
+*   Python 3.8+ (Python 3.10 used in Dockerfile)
+*   Docker & Docker Compose (Version 1.x might require multi-step updates, see below)
 *   Google Cloud Project with Drive API enabled
     *   OAuth 2.0 Credentials (`credentials.json`) OR Service Account Key (`service_account.json`)
 *   Google Gemini API Key
@@ -31,14 +35,14 @@ This Flask application processes audio files from Google Drive, performs speech-
     cd audio-processor
     ```
 2.  **Create `.env` file:**
-    Copy `.env.example` to `.env` and fill in your credentials and IDs:
+    Copy `.env.example` to `.env` (if it exists, otherwise create it) and fill in your credentials and IDs:
     ```env
     # Google Drive API
     # Option 1: OAuth (set USE_SERVICE_ACCOUNT=false)
-    GOOGLE_CREDS_JSON_PATH=./credentials.json
+    # GOOGLE_CREDS_JSON_PATH=./credentials.json # Path inside container is /app/credentials/credentials.json
     # Option 2: Service Account (set USE_SERVICE_ACCOUNT=true)
-    GOOGLE_SA_JSON_PATH=./service_account.json
-    USE_SERVICE_ACCOUNT=false # or true
+    GOOGLE_SA_JSON_PATH=/app/credentials/service_account.json # Use path inside container
+    USE_SERVICE_ACCOUNT=true # Set to true or false
 
     # Google Gemini API
     GEMINI_API_KEY=YOUR_GEMINI_API_KEY
@@ -55,14 +59,16 @@ This Flask application processes audio files from Google Drive, performs speech-
     FLASK_DEBUG=false
     ```
 3.  **Place Credentials:**
-    *   If using OAuth, place your `credentials.json` file in the project root.
-    *   If using a Service Account, place your key file (e.g., `service_account.json`) in the project root and update `GOOGLE_SA_JSON_PATH` in `.env`.
+    *   Create a `credentials` directory in your project root: `mkdir credentials`
+    *   Place your Google credentials file (`credentials.json` or `service_account.json`) inside this `credentials` directory. **Ensure the filename matches the one specified in `.env` (e.g., `service_account.json`).**
 4.  **Build and Run with Docker Compose:**
     ```bash
+    # Build the image initially
     docker-compose build audio-processor
+    # Start the service in detached mode
     docker-compose up -d
     ```
-    *(This assumes your service in `docker-compose.yml` is named `audio-processor` and includes installing dependencies like `PyPDF2`)*
+    *(This assumes your service in `docker-compose.yml` is named `audio-processor`)*
 
 ## API Usage
 

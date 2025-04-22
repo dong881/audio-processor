@@ -10,6 +10,12 @@ services:
     environment:
       - PORT=5000
       - FLASK_DEBUG=false
+      # Redirect cache directories to a writable location within the container
+      - HF_HOME=/app/.cache/huggingface
+      - TORCH_HOME=/app/.cache/torch
+      - PYANNOTE_CACHE=/app/.cache/pyannote
+      # Optional: Set home directory explicitly for other potential needs
+      - HOME=/home/appuser
     env_file:
       - .env
     volumes:
