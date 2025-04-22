@@ -17,3 +17,4 @@ torchaudio==2.0.2
 pyannote.audio==3.1.1
 ffmpeg-python==0.2.0  # 提供 ffmpeg 的 Python 綁定
 soundfile==0.12.1
+numpy<2.0 # Add this line to pin NumPy version
