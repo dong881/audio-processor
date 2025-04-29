@@ -436,13 +436,14 @@ class AudioProcessor:
         if not notion_token or not database_id:
             raise ValueError("缺少 Notion API 設定")
 
-        blocks = []
+        # --- Prepare initial blocks (metadata, participants, summary, todos) ---
+        initial_blocks = []
         current_date_str = datetime.now().strftime("%Y-%m-%d")
 
         # --- Participants Section ---
         participants = list(set(speaker_map.values()))  # Get unique identified names
         if participants:
-            blocks.append({
+            initial_blocks.append({
                 "object": "block",
                 "type": "heading_2",
                 "heading_2": {
@@ -450,34 +451,34 @@ class AudioProcessor:
                 }
             })
             participant_text = ", ".join(participants)
-            blocks.append({
+            initial_blocks.append({
                 "object": "block",
                 "type": "paragraph",
                 "paragraph": {
                     "rich_text": [{"type": "text", "text": {"content": participant_text}}]
                 }
             })
-            blocks.append({"object": "block", "type": "divider", "divider": {}})  # Divider
+            initial_blocks.append({"object": "block", "type": "divider", "divider": {}})  # Divider
 
         # --- Summary Section ---
-        blocks.append({
+        initial_blocks.append({
             "object": "block",
             "type": "heading_2",
             "heading_2": {
                 "rich_text": [{"type": "text", "text": {"content": "摘要"}}]
             }
         })
-        blocks.append({
+        initial_blocks.append({
             "object": "block",
             "type": "paragraph",
             "paragraph": {
                 "rich_text": [{"type": "text", "text": {"content": summary}}]
             }
         })
-        blocks.append({"object": "block", "type": "divider", "divider": {}})  # Divider
+        initial_blocks.append({"object": "block", "type": "divider", "divider": {}})  # Divider
 
         # --- To-Do Section (as Table) ---
-        blocks.append({
+        initial_blocks.append({
             "object": "block",
             "type": "heading_2",
             "heading_2": {
@@ -493,7 +494,7 @@ class AudioProcessor:
                     "cells": [[{"type": "text", "text": {"content": todo}}]]  # Each cell is a list of rich text objects
                 })
 
-            blocks.append({
+            initial_blocks.append({
                 "object": "block",
                 "type": "table",
                 "table": {
@@ -504,24 +505,24 @@ class AudioProcessor:
                 }
             })
         else:
-            blocks.append({
+            initial_blocks.append({
                 "object": "block",
                 "type": "paragraph",
                 "paragraph": {
                     "rich_text": [{"type": "text", "text": {"content": "無待辦事項。"}}]
                 }
             })
-        blocks.append({"object": "block", "type": "divider", "divider": {}})  # Divider
+        initial_blocks.append({"object": "block", "type": "divider", "divider": {}})  # Divider
 
-        # --- Full Transcript Section ---
-        blocks.append({
+        # --- Full Transcript Section Header ---
+        initial_blocks.append({
             "object": "block",
             "type": "heading_2",
             "heading_2": {
                 "rich_text": [{"type": "text", "text": {"content": "完整記錄"}}]
             }
         })
-        blocks.append({
+        initial_blocks.append({
             "object": "block",
             "type": "paragraph",
             "paragraph": {
@@ -529,11 +530,13 @@ class AudioProcessor:
             }
         })
 
+        # --- Prepare transcript segment blocks for batch processing ---
+        transcript_blocks = []
         for segment in segments:
             speaker = segment["speaker"]
             text = segment["text"]
             content = f"[{speaker}]: {text}"
-            blocks.append({
+            transcript_blocks.append({
                 "object": "block",
                 "type": "paragraph",
                 "paragraph": {
@@ -549,6 +552,7 @@ class AudioProcessor:
 
         page_title = f"{title} ({current_date_str})"
 
+        # Step 1: Create the initial page with basic information
         data = {
             "parent": {"database_id": database_id},
             "properties": {
@@ -556,10 +560,11 @@ class AudioProcessor:
                     "title": [{"text": {"content": page_title}}]
                 }
             },
-            "children": blocks
+            "children": initial_blocks
         }
 
         try:
+            logging.info(f"- 建立基本 Notion 頁面 (標題、摘要等)")
             response = requests.post(
                 "https://api.notion.com/v1/pages",
                 headers=headers,
@@ -569,8 +574,45 @@ class AudioProcessor:
             result = response.json()
             page_id = result["id"]
             page_url = result.get("url", f"https://www.notion.so/{page_id.replace('-', '')}")
+            
+            # Step 2: Append transcript segments in batches of 100
+            if transcript_blocks:
+                batch_size = 100
+                total_batches = (len(transcript_blocks) + batch_size - 1) // batch_size  # Ceiling division
+                
+                logging.info(f"- 開始分批添加轉錄內容 (共 {len(transcript_blocks)} 段，分 {total_batches} 批)")
+                
+                for i in range(0, len(transcript_blocks), batch_size):
+                    batch_num = i // batch_size + 1
+                    end_idx = min(i + batch_size, len(transcript_blocks))
+                    current_batch = transcript_blocks[i:end_idx]
+                    
+                    logging.info(f"  - 添加第 {batch_num}/{total_batches} 批 ({len(current_batch)} 段)")
+                    
+                    try:
+                        append_response = requests.patch(
+                            f"https://api.notion.com/v1/blocks/{page_id}/children",
+                            headers=headers,
+                            json={"children": current_batch}
+                        )
+                        append_response.raise_for_status()
+                        
+                        # Add a small delay to avoid rate limiting
+                        if i + batch_size < len(transcript_blocks):
+                            time.sleep(0.5)
+                    except requests.exceptions.RequestException as batch_e:
+                        logging.error(f"❌ 批次 {batch_num} 添加失敗: {str(batch_e)}")
+                        if batch_e.response is not None:
+                            try:
+                                err_details = batch_e.response.json()
+                                logging.error(f"   錯誤碼: {batch_e.response.status_code}, 訊息: {json.dumps(err_details, indent=2, ensure_ascii=False)}")
+                            except json.JSONDecodeError:
+                                logging.error(f"   響應內容 (非 JSON): {batch_e.response.text}")
+                        # Continue with next batch even if one fails
+            
             logging.info(f"✅ Notion 頁面建立成功 (ID: {page_id}, URL: {page_url})")
             return page_id, page_url
+            
         except requests.exceptions.RequestException as e:
             logging.error(f"❌ Notion API 請求失敗: {str(e)}", exc_info=True)
             if e.response is not None:

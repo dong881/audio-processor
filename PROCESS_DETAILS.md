@@ -151,7 +151,13 @@ sequenceDiagram
         *   Summary and To-Do sections are created.
         *   A "完整記錄" section is added.
         *   Each segment from the input `segments` is added as a paragraph block formatted as `[Speaker Name]: Text`. Timestamps are omitted.
-    3.  Constructs the API request payload, including the parent database ID, page title (with current date), and the children blocks.
-    4.  Sends a POST request to the Notion API (`https://api.notion.com/v1/pages`).
+    3.  Constructs the API request payload, including the parent database ID, page title (with current date).
+    4.  Uses a batch processing approach to handle the Notion API's 100-block limit per request:
+        *   First creates a page with essential content (metadata, participants, summary, to-dos)
+        *   Then appends transcript segments in batches of up to 100 blocks per request
+        *   Includes rate limiting between batch requests to avoid API throttling
+    5.  Sends requests to the Notion API endpoints:
+        *   Initial page creation: `https://api.notion.com/v1/pages`
+        *   Batch append: `https://api.notion.com/v1/blocks/{page_id}/children`
 *   **Output:** `(page_id, page_url)` (tuple) - The ID and URL of the newly created Notion page.
-*   **Error Handling:** Raises exceptions on Notion API errors, logging response details.
+*   **Error Handling:** Raises exceptions on Notion API errors, logging response details. Handles batch failures gracefully, continuing with subsequent batches.
