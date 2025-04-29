@@ -426,8 +426,8 @@ class AudioProcessor:
             "todos": ["檢閱會議記錄並手動整理重點"]
         }
 
-    def create_notion_page(self, title: str, summary: str, todos: List[str], segments: List[Dict[str, Any]]) -> Tuple[str, str]:
-        """建立 Notion 頁面 (移除逐字稿時間戳)"""
+    def create_notion_page(self, title: str, summary: str, todos: List[str], segments: List[Dict[str, Any]], speaker_map: Dict[str, str]) -> Tuple[str, str]:
+        """建立 Notion 頁面，包含參與者和表格化的待辦事項"""
         logging.info("🔄 建立 Notion 頁面...")
 
         notion_token = os.getenv("NOTION_TOKEN")
@@ -437,7 +437,29 @@ class AudioProcessor:
             raise ValueError("缺少 Notion API 設定")
 
         blocks = []
+        current_date_str = datetime.now().strftime("%Y-%m-%d")
 
+        # --- Participants Section ---
+        participants = list(set(speaker_map.values()))  # Get unique identified names
+        if participants:
+            blocks.append({
+                "object": "block",
+                "type": "heading_2",
+                "heading_2": {
+                    "rich_text": [{"type": "text", "text": {"content": "參與者"}}]
+                }
+            })
+            participant_text = ", ".join(participants)
+            blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": participant_text}}]
+                }
+            })
+            blocks.append({"object": "block", "type": "divider", "divider": {}})  # Divider
+
+        # --- Summary Section ---
         blocks.append({
             "object": "block",
             "type": "heading_2",
@@ -452,7 +474,9 @@ class AudioProcessor:
                 "rich_text": [{"type": "text", "text": {"content": summary}}]
             }
         })
+        blocks.append({"object": "block", "type": "divider", "divider": {}})  # Divider
 
+        # --- To-Do Section (as Table) ---
         blocks.append({
             "object": "block",
             "type": "heading_2",
@@ -460,17 +484,36 @@ class AudioProcessor:
                 "rich_text": [{"type": "text", "text": {"content": "待辦事項"}}]
             }
         })
+        if todos:
+            # Create a simple table structure
+            table_rows = []
+            for todo in todos:
+                table_rows.append({
+                    "type": "table_row",
+                    "cells": [[{"type": "text", "text": {"content": todo}}]]  # Each cell is a list of rich text objects
+                })
 
-        for todo in todos:
             blocks.append({
                 "object": "block",
-                "type": "to_do",
-                "to_do": {
-                    "rich_text": [{"type": "text", "text": {"content": todo}}],
-                    "checked": False
+                "type": "table",
+                "table": {
+                    "table_width": 1,  # Number of columns
+                    "has_column_header": False,  # Set to True if you add a header row above
+                    "has_row_header": False,
+                    "children": table_rows
                 }
             })
+        else:
+            blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": "無待辦事項。"}}]
+                }
+            })
+        blocks.append({"object": "block", "type": "divider", "divider": {}})  # Divider
 
+        # --- Full Transcript Section ---
         blocks.append({
             "object": "block",
             "type": "heading_2",
@@ -478,7 +521,6 @@ class AudioProcessor:
                 "rich_text": [{"type": "text", "text": {"content": "完整記錄"}}]
             }
         })
-
         blocks.append({
             "object": "block",
             "type": "paragraph",
@@ -490,9 +532,7 @@ class AudioProcessor:
         for segment in segments:
             speaker = segment["speaker"]
             text = segment["text"]
-
             content = f"[{speaker}]: {text}"
-
             blocks.append({
                 "object": "block",
                 "type": "paragraph",
@@ -507,12 +547,13 @@ class AudioProcessor:
             "Notion-Version": "2022-06-28"
         }
 
-        current_date = datetime.now().strftime("%Y-%m-%d")
+        page_title = f"{title} ({current_date_str})"
+
         data = {
             "parent": {"database_id": database_id},
             "properties": {
                 "title": {
-                    "title": [{"text": {"content": f"{title} ({current_date})"}}]
+                    "title": [{"text": {"content": page_title}}]
                 }
             },
             "children": blocks
@@ -549,6 +590,7 @@ class AudioProcessor:
         attachment_temp_dir = None
         attachment_text = None
         summary_data = None
+        speaker_map = {}
 
         try:
             logging.info(f"Processing file_id: {file_id}, attachment_file_id: {attachment_file_id}")
@@ -575,7 +617,9 @@ class AudioProcessor:
             summary = summary_data["summary"]
             todos = summary_data["todos"]
 
-            page_id, page_url = self.create_notion_page(title, summary, todos, updated_segments)
+            page_id, page_url = self.create_notion_page(
+                title, summary, todos, updated_segments, speaker_map
+            )
 
             logging.info(f"✅ File processing successful for file_id: {file_id}")
             return {
@@ -593,6 +637,7 @@ class AudioProcessor:
             final_title = summary_data["title"] if summary_data else "處理失敗"
             final_summary = summary_data["summary"] if summary_data else f"處理過程中發生錯誤: {str(e)}"
             final_todos = summary_data["todos"] if summary_data else ["檢查處理日誌"]
+            final_speakers = speaker_map if speaker_map else None
 
             return {
                 "success": False,
@@ -602,7 +647,7 @@ class AudioProcessor:
                 "title": final_title,
                 "summary": final_summary,
                 "todos": final_todos,
-                "identified_speakers": None
+                "identified_speakers": final_speakers
             }
 
         finally:
