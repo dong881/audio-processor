@@ -19,6 +19,24 @@ This Flask application processes audio files from Google Drive, performs speech-
 *   **NEW**: Google Drive links included in the Notion page.
 *   **NEW**: Job status tracking and progress monitoring APIs.
 
+## Documentation
+
+For detailed information about the application's functionality and how to use it, please refer to the following documentation:
+
+### API Documentation
+- [API Reference](./docs/api/README.md) - Endpoints for processing files and checking job status
+
+### Core Functionality
+- [Asynchronous Processing](./docs/core/async_processing.md) - Job management and multi-threading
+- [Audio Processing](./docs/core/audio_processing.md) - Audio file handling and transcription
+- [AI Processing](./docs/core/ai_processing.md) - Speaker identification and summarization
+- [External Integrations](./docs/core/external_integrations.md) - Google Drive and Notion integration
+
+### Utility Functions
+- [Helper Functions](./docs/utils/helper_functions.md) - Utility functions used by the application
+
+For a quick overview of all documentation, see the [Documentation Overview](./docs/README.md).
+
 ## Detailed Workflow
 
 For a detailed step-by-step explanation of the application's internal workflow and function interactions, please see the [**Process Details Document**](./PROCESS_DETAILS.md).
@@ -112,7 +130,7 @@ curl -X POST http://localhost:5000/process \
 ```json
 {
   "success": true,
-  "message": "工作已提交，正在後台處理",
+  "message": "Job submitted, processing in background",
   "job_id": "12345678-1234-5678-1234-567812345678"
 }
 ```
@@ -217,28 +235,59 @@ A health check endpoint is available that also shows the number of active jobs:
 
 ## Updating the Application
 
-If you modify the Python code (`app.py` or other dependencies), you need to rebuild the image and restart the container.
+A management script `manage_service.sh` is provided to simplify common operations with the Docker service.
 
-**Note:** Due to potential incompatibilities with older `docker-compose` versions (like 1.x), using `docker-compose up -d --build` might result in errors (`KeyError: 'ContainerConfig'`). The safer approach is to explicitly stop, remove, build, and then start the service:
+### Using the Management Script
 
-1.  **Stop the currently running service:**
-    ```bash
-    docker-compose stop audio-processor
-    ```
-2.  **Remove the stopped container:**
-    ```bash
-    docker-compose rm -f audio-processor
-    ```
-3.  **Build the new image:**
-    ```bash
-    docker-compose build audio-processor
-    ```
-4.  **Start the service with the new image:**
-    ```bash
-    docker-compose up -d
-    ```
+Make the script executable if it isn't already:
+```bash
+chmod +x ./manage_service.sh
+```
 
-This ensures the old container is fully removed before the new one is created from the updated image.
+Available commands:
+
+- **Start the service:**
+  ```bash
+  ./manage_service.sh start
+  ```
+
+- **Stop the service:**
+  ```bash
+  ./manage_service.sh stop
+  ```
+
+- **Update the application** (after code changes):
+  ```bash
+  ./manage_service.sh update
+  ```
+  This command handles stopping, removing, rebuilding, and restarting the service in one step, avoiding potential issues with Docker Compose version incompatibilities.
+
+- **View logs** (with continuous following like `tail -f`):
+  ```bash
+  ./manage_service.sh logs
+  ```
+
+- **Check service status:**
+  ```bash
+  ./manage_service.sh status
+  ```
+
+- **Clean up unused Docker images:**
+  ```bash
+  ./manage_service.sh clean
+  ```
+
+### Manual Update Process
+
+If you prefer not to use the script, you can manually update the application when you modify the Python code by following these steps:
+
+1. Stop the service: `docker-compose stop audio-processor`
+2. Remove the container: `docker-compose rm -f audio-processor`
+3. Rebuild the image: `docker-compose build audio-processor`
+4. Start the service: `docker-compose up -d`
+5. View logs: `docker-compose logs -f audio-processor`
+
+This explicit step-by-step process avoids potential issues with some Docker Compose versions (particularly 1.x) that can cause errors like `KeyError: 'ContainerConfig'` when using simpler commands like `docker-compose up -d --build`.
 
 ## Additional Dependencies
 

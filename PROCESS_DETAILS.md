@@ -156,6 +156,20 @@ sequenceDiagram
 *   **Output:** `(page_id, page_url)` (tuple) - The ID and URL of the newly created Notion page.
 *   **Error Handling:** Raises exceptions on Notion API errors, logging response details. Handles batch failures gracefully, continuing with subsequent batches.
 
+#### `load_models()`
+
+*   **Purpose:** Lazily loads AI models to save memory until they are needed.
+*   **Input:** None.
+*   **Process:**
+    1.  Checks if models are already loaded to prevent redundant loading.
+    2.  Loads the Whisper model for speech-to-text transcription.
+    3.  Loads the Pyannote model for speaker diarization with enhanced error handling:
+        *   Uses a specific model version (pyannote/speaker-diarization@2.1) for better compatibility
+        *   Implements a retry mechanism that attempts loading up to 3 times before failing
+        *   Provides detailed logging and progress information during loading attempts
+*   **Output:** None - updates the instance variables `whisper_model` and `diarization_pipeline`.
+*   **Error Handling:** Catches exceptions during model loading, logs detailed error messages, and implements retry logic for transient errors. After multiple failed attempts, raises the last encountered exception to caller.
+
 #### `process_audio(audio_path)`
 
 *   **Purpose:** Processes audio for transcription and diarization with preprocessing.
