@@ -182,6 +182,17 @@ sequenceDiagram
 *   **Output:** Same as before.
 *   **Error Handling:** Same as before, with additional handling for preprocessing errors.
 
+#### `generate_comprehensive_notes(transcript)`
+
+*   **Purpose:** Generate structured notes from meeting transcript using Gemini AI.
+*   **Input:** `transcript` (string) - Full meeting transcript text.
+*   **Process:**
+    1.  Sends the transcript to Gemini 2.5 Pro model with formatting instructions.
+    2.  Uses a direct, single-prompt approach to convert the transcript into structured notes.
+    3.  Formats the output for optimal display in Notion with topic headings, bullet points, and decision markers.
+*   **Output:** `comprehensive_notes` (string) - Well-structured meeting notes.
+*   **Error Handling:** Returns a fallback message if note generation fails.
+
 ## API Endpoints
 
 ### `/process` (POST)

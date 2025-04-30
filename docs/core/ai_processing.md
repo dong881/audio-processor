@@ -95,7 +95,7 @@ for item in summary_data['todos']:
 
 ## generate_comprehensive_notes
 
-Uses Google Gemini to create structured, detailed meeting notes.
+Uses Google Gemini to create structured, readable meeting notes.
 
 ### Signature
 
@@ -113,15 +113,15 @@ def generate_comprehensive_notes(self, transcript: str) -> str:
 
 ### Description
 
-This function creates professional meeting notes through a two-stage process:
-1. First analysis: Extracts important discussion points, decisions, and key information
-2. Second analysis: Reorganizes these points into a structured document with:
-   - Clear topic classifications
-   - Detailed discussion content for each topic
-   - Decisions and action items
-   - Summary and follow-up steps
+This function creates professional meeting notes using the latest Gemini 2.5 Pro model:
+1. Sends the full transcript to Gemini with a clear, direct prompt
+2. Instructs the model to create organized notes with:
+   - Clear topic sections prefixed with "主題："
+   - Bullet points using "•" symbols
+   - Decision items marked with "決策："
+   - Appropriate formatting for Notion compatibility
 
-The notes are formatted with appropriate headings, paragraphs, and emphasis to create a readable and professional document.
+The function uses a straightforward, single-pass approach that produces consistently well-structured notes optimized for readability in Notion.
 
 ### Example
 

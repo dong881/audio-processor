@@ -260,60 +260,161 @@ class AudioProcessor:
             else:
                 return f"{minutes:02d}:{seconds:02d}"
             
+    def extract_date_from_filename(self, filename: str) -> Optional[str]:
+        """從檔案名稱中提取日期，支援多種格式"""
+        # 嘗試匹配 REC_YYYYMMDD_HHMMSS 格式
+        pattern1 = r'REC_(\d{8})_\d+'
+        match1 = re.search(pattern1, filename)
+        if match1:
+            date_str = match1.group(1)
+            try:
+                # 將 YYYYMMDD 轉換為 YYYY-MM-DD
+                date_obj = datetime.strptime(date_str, '%Y%m%d')
+                return date_obj.strftime('%Y-%m-%d')
+            except ValueError:
+                pass
+        
+        # 嘗試匹配已有的 [YYYY-MM-DD] 格式
+        pattern2 = r'\[(\d{4}-\d{2}-\d{2})\]'
+        match2 = re.search(pattern2, filename)
+        if match2:
+            return match2.group(1)
+            
+        # 嘗試匹配其他可能的日期格式 (YYYY-MM-DD)
+        pattern3 = r'(\d{4}-\d{2}-\d{2})'
+        match3 = re.search(pattern3, filename)
+        if match3:
+            return match3.group(1)
+            
+        # 如果都無法匹配，返回 None
+        return None
+
     def generate_comprehensive_notes(self, transcript: str) -> str:
-        """使用 Gemini API 進行迭代分析，生成結構化的完整筆記"""
-        logging.info("🔄 生成完整筆記...")
+        """使用 Gemini API 生成結構化的筆記"""
+        logging.info("🔄 生成筆記...")
         
         try:
-            # 第一階段：分析重點
-            system_prompt_1 = """
-            你是一位專業會議記錄專家。請分析以下會議記錄，找出所有重要的討論點、決策和關鍵信息。
-            列出所有重要主題和各個主題下的關鍵點。請確保涵蓋所有重要資訊，但避免冗餘內容。
-            格式要求：以大綱形式呈現，使用明確的標題和子標題。
-            """
+            # 使用更詳細的Markdown格式指示
+            system_prompt = """幫我將錄音逐字稿整理成筆記內容，請使用以下Markdown格式:
+
+            1. 使用 ## 作為主要標題，### 作為子標題
+            2. 使用 - 建立清單項目
+            3. 特別重要的決策或行動項目，請用以下格式標註:
+               :::決策：這是一個重要決策:::
+               :::行動項目：這是需要執行的事項:::
             
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            response_1 = model.generate_content(
+            請確保內容結構清晰，包含會議重點、討論要點與決策。"""
+            
+            # 使用新的模型
+            model = genai.GenerativeModel('gemini-2.5-pro-exp-03-25')
+            response = model.generate_content(
                 [
-                    system_prompt_1,
-                    f"會議記錄：\n{transcript}"
+                    system_prompt,
+                    f"會議逐字稿：\n{transcript}"
                 ]
             )
             
-            key_points = response_1.text
-            
-            # 第二階段：重組為完整筆記
-            system_prompt_2 = """
-            你是一位專業文檔編輯。請根據下面提供的會議重點內容，創建一份結構完整、組織良好的會議筆記。
-            筆記應該包含：
-            1. 清晰的主題分類
-            2. 各個主題的詳細討論內容
-            3. 所有決策和行動項目
-            4. 總結和後續步驟
-            
-            格式要求：
-            - 使用適當的標題和小標題
-            - 段落結構清晰
-            - 重點內容應該被強調
-            - 適當使用項目符號列表表示相關項目
-            
-            請確保筆記內容專業、簡潔且易於理解。
-            """
-            
-            response_2 = model.generate_content(
-                [
-                    system_prompt_2,
-                    f"以下是會議重點內容：\n{key_points}"
-                ]
-            )
-            
-            comprehensive_notes = response_2.text
-            logging.info("✅ 完整筆記生成成功")
+            comprehensive_notes = response.text
+            logging.info("✅ 筆記生成成功")
             return comprehensive_notes
             
         except Exception as e:
-            logging.error(f"❌ 完整筆記生成失敗: {str(e)}")
+            logging.error(f"❌ 筆記生成失敗: {str(e)}")
             return "筆記生成失敗，請參考會議摘要和完整記錄。"
+
+    def _process_note_format_for_notion(self, text: str) -> list:
+        """將Markdown文本處理成適合 Notion API 的格式"""
+        blocks = []
+        lines = text.split('\n')
+        
+        i = 0
+        in_callout = False
+        callout_content = ""
+        
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # 跳過空行
+            if not line:
+                i += 1
+                continue
+                
+            # 檢測callout結束
+            if in_callout and line == ':::':
+                blocks.append({
+                    "object": "block",
+                    "type": "callout",
+                    "callout": {
+                        "rich_text": [{"type": "text", "text": {"content": callout_content.strip()}}],
+                        "icon": {"emoji": "✅"}
+                    }
+                })
+                in_callout = False
+                callout_content = ""
+                i += 1
+                continue
+                
+            # 收集callout內容
+            if in_callout:
+                callout_content += line + "\n"
+                i += 1
+                continue
+                
+            # 檢測callout開始
+            if line.startswith(':::'):
+                in_callout = True
+                callout_content = line[3:] + "\n"  # 移除開頭的 :::
+                i += 1
+                continue
+                
+            # 檢查Markdown標題 (## 或 ###)
+            if line.startswith('##'):
+                heading_level = 3 if line.startswith('###') else 2
+                heading_text = line.lstrip('#').strip()
+                
+                blocks.append({
+                    "object": "block",
+                    "type": f"heading_{heading_level}",
+                    f"heading_{heading_level}": {
+                        "rich_text": [{"type": "text", "text": {"content": heading_text}}]
+                    }
+                })
+            
+            # 檢查列點 (以 -, *, + 開頭)
+            elif line.startswith('-') or line.startswith('*') or line.startswith('+'):
+                content = line[1:].strip()
+                blocks.append({
+                    "object": "block",
+                    "type": "bulleted_list_item",
+                    "bulleted_list_item": {
+                        "rich_text": [{"type": "text", "text": {"content": content}}]
+                    }
+                })
+            
+            # 普通段落
+            else:
+                blocks.append({
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [{"type": "text", "text": {"content": line}}]
+                    }
+                })
+                
+            i += 1
+            
+        # 處理未關閉的callout
+        if in_callout and callout_content:
+            blocks.append({
+                "object": "block",
+                "type": "callout",
+                "callout": {
+                    "rich_text": [{"type": "text", "text": {"content": callout_content.strip()}}],
+                    "icon": {"emoji": "✅"}
+                }
+            })
+            
+        return blocks
 
     def create_notion_page(self, title: str, summary: str, todos: List[str], segments: List[Dict[str, Any]], speaker_map: Dict[str, str], file_id: str = None) -> Tuple[str, str]:
         """建立單一 Notion 頁面，包含標題、日期、參與者、摘要、待辦事項、完整筆記與內嵌的逐字稿"""
@@ -327,9 +428,27 @@ class AudioProcessor:
 
         # --- 準備頁面內容區塊 ---
         blocks = []
+        
+        # 從檔案名稱提取日期或使用當前日期
         current_date = datetime.now()
         current_date_str = current_date.strftime("%Y-%m-%d")
-        formatted_date = current_date.strftime("%Y年%m月%d日")
+        
+        # 嘗試從檔案ID獲取檔案名稱並提取日期
+        file_date = None
+        if file_id:
+            try:
+                file_meta = self.drive_service.files().get(
+                    fileId=file_id, fields="name"
+                ).execute()
+                filename = file_meta.get('name', '')
+                if filename:
+                    file_date = self.extract_date_from_filename(filename)
+            except Exception as e:
+                logging.error(f"❌ 獲取檔案日期失敗: {str(e)}")
+        
+        # 使用檔案日期或當前日期
+        date_str = file_date if file_date else current_date_str
+        formatted_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%Y年%m月%d日")
 
         # --- 標題區塊 (使用日期+錄音檔案名稱) ---
         page_title = f"{formatted_date} {title}"
@@ -357,6 +476,23 @@ class AudioProcessor:
             except Exception as e:
                 logging.error(f"❌ 獲取檔案連結失敗: {str(e)}")
 
+        # --- 日期區塊 ---
+        blocks.append({
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {
+            "rich_text": [{"type": "text", "text": {"content": "📅 日期"}}]
+            }
+        })
+        blocks.append({
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+            "rich_text": [{"type": "text", "text": {"content": formatted_date}}]
+            }
+        })
+
+        blocks.append({"object": "block", "type": "divider", "divider": {}})
         # --- 參與者區塊 ---
         participants = list(set(speaker_map.values()))  # 獲取唯一識別的名稱
         if participants:
@@ -445,14 +581,10 @@ class AudioProcessor:
             }
         })
         
-        # 使用引言區塊來突出顯示詳細筆記
-        blocks.append({
-            "object": "block",
-            "type": "paragraph",
-            "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": comprehensive_notes}}]
-            }
-        })
+        # 使用新的格式處理函數
+        note_blocks = self._process_note_format_for_notion(comprehensive_notes)
+        blocks.extend(note_blocks)
+        
         blocks.append({"object": "block", "type": "divider", "divider": {}})
 
         # --- 內嵌完整逐字稿區塊 (使用 toggle 區塊) ---
@@ -710,7 +842,7 @@ class AudioProcessor:
             只需回傳JSON，不要有其他文字。
             """
             
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            model = genai.GenerativeModel('gemini-2.5-pro-exp-03-25')
             response = model.generate_content(
                 [
                     system_prompt,
@@ -758,7 +890,7 @@ class AudioProcessor:
             只需回傳 JSON，不要有其他文字。
             """
             
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            model = genai.GenerativeModel('gemini-2.5-pro-exp-03-25')
             response = model.generate_content(
                 [
                     system_prompt,
@@ -870,6 +1002,7 @@ class AudioProcessor:
         attachment_text = None
         summary_data = None
         speaker_map = {}
+        original_filename = None
 
         # 更新工作狀態為處理中
         with self.jobs_lock:
@@ -879,6 +1012,17 @@ class AudioProcessor:
 
         try:
             logging.info(f"[Job {job_id}] 開始處理 file_id: {file_id}")
+            
+            # 獲取原始檔案名稱
+            try:
+                file_meta = self.drive_service.files().get(
+                    fileId=file_id, fields="name"
+                ).execute()
+                original_filename = file_meta.get('name', '')
+                logging.info(f"[Job {job_id}] 原始檔案名稱: {original_filename}")
+            except Exception as e:
+                logging.error(f"[Job {job_id}] ❌ 獲取原始檔案名稱失敗: {e}")
+                original_filename = ""
             
             # 更新進度: 10%
             with self.jobs_lock:
@@ -955,8 +1099,13 @@ class AudioProcessor:
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
             
             # 重命名 Google Drive 檔案 (可選)
-            # 格式: [摘要日期] 檔案標題
-            new_filename = f"[{datetime.now().strftime('%Y-%m-%d')}] {title}"
+            # 從原始檔名提取日期，如果無法提取則使用當前日期
+            file_date = None
+            if original_filename:
+                file_date = self.extract_date_from_filename(original_filename)
+            
+            date_str = file_date if file_date else datetime.now().strftime('%Y-%m-%d')
+            new_filename = f"[{date_str}] {title}.m4a"
             self.rename_drive_file(file_id, new_filename)
             
             # 更新工作狀態為完成
@@ -1088,10 +1237,22 @@ processor = AudioProcessor(max_workers=3)
 @app.route('/health', methods=['GET'])
 def health_check():
     """健康檢查端點"""
+    # Create a consistent snapshot of jobs while holding the lock
+    with processor.jobs_lock:
+        # Create a full copy of the jobs dictionary to ensure a consistent snapshot
+        all_jobs = {job_id: job.copy() for job_id, job in processor.jobs.items()}
+    
+    # Count active jobs from the snapshot (outside the lock)
+    active_job_count = len([j for j in all_jobs.values() 
+                          if j['status'] in [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']]])
+    
+    # Log the count for debugging
+    logging.debug(f"Health check: Found {active_job_count} active jobs at {datetime.now().isoformat()}")
+    
     return jsonify({
         "status": "healthy", 
         "timestamp": datetime.now().isoformat(),
-        "active_jobs": len([j for j in processor.jobs.values() if j['status'] in [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']]])
+        "active_jobs": active_job_count
     })
 
 @app.route('/process', methods=['POST'])
@@ -1143,10 +1304,20 @@ def get_job_status_endpoint(job_id):
 
 @app.route('/jobs', methods=['GET'])
 def get_active_jobs_endpoint():
-    """獲取活躍工作列表的 API 端點"""
+    """獲取工作列表的 API 端點，可選擇性過濾狀態"""
     try:
+        # Get filter status from query parameter, default to show only active jobs
+        filter_status = request.args.get('filter', 'active')
+        
+        # Create a consistent snapshot of jobs while holding the lock
         with processor.jobs_lock:
-            active_jobs = {
+            # First create a snapshot of all jobs while holding the lock
+            all_jobs = {job_id: job.copy() for job_id, job in processor.jobs.items()}
+        
+        # Process the jobs data outside the lock to minimize lock contention
+        if filter_status == 'all':
+            # Return all jobs regardless of status
+            jobs_to_return = {
                 job_id: {
                     'id': job['id'],
                     'status': job['status'],
@@ -1154,14 +1325,63 @@ def get_active_jobs_endpoint():
                     'created_at': job['created_at'],
                     'updated_at': job['updated_at']
                 }
-                for job_id, job in processor.jobs.items()
+                for job_id, job in all_jobs.items()
+            }
+        elif filter_status == 'active':
+            # Return only pending or processing jobs
+            jobs_to_return = {
+                job_id: {
+                    'id': job['id'],
+                    'status': job['status'],
+                    'progress': job['progress'],
+                    'created_at': job['created_at'],
+                    'updated_at': job['updated_at']
+                }
+                for job_id, job in all_jobs.items()
                 if job['status'] in [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']]
             }
+        elif filter_status == 'completed':
+            # Return only completed jobs
+            jobs_to_return = {
+                job_id: {
+                    'id': job['id'],
+                    'status': job['status'],
+                    'progress': job['progress'],
+                    'created_at': job['created_at'],
+                    'updated_at': job['updated_at']
+                }
+                for job_id, job in all_jobs.items()
+                if job['status'] == JOB_STATUS['COMPLETED']
+            }
+        elif filter_status == 'failed':
+            # Return only failed jobs
+            jobs_to_return = {
+                job_id: {
+                    'id': job['id'],
+                    'status': job['status'],
+                    'progress': job['progress'],
+                    'created_at': job['created_at'],
+                    'updated_at': job['updated_at']
+                }
+                for job_id, job in all_jobs.items()
+                if job['status'] == JOB_STATUS['FAILED']
+            }
+        else:
+            # Invalid filter value
+            return jsonify({"success": False, "error": "Invalid filter parameter. Use 'active', 'all', 'completed', or 'failed'"}), 400
             
-        return jsonify({
+        # Add job count information
+        result = {
             "success": True,
-            "active_jobs": active_jobs
-        })
+            "active_jobs": jobs_to_return,
+            "count": len(jobs_to_return),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Log the results for debugging
+        logging.debug(f"Jobs endpoint: Found {len(jobs_to_return)} jobs with filter={filter_status} at {datetime.now().isoformat()}")
+        
+        return jsonify(result)
         
     except Exception as e:
         logging.error(f"API 錯誤: {e}", exc_info=True)

@@ -104,15 +104,27 @@ Retrieves the current status of a processing job.
 
 ## List Active Jobs
 
-Retrieves a list of all currently active (pending or processing) jobs.
+Retrieves a list of jobs based on their status.
 
 **Endpoint:** `GET /jobs`
+
+**Query Parameters:**
+- `filter` (optional): Filter jobs by status
+  - `active` (default): Returns only pending or processing jobs
+  - `all`: Returns all jobs regardless of status
+  - `completed`: Returns only completed jobs
+  - `failed`: Returns only failed jobs
+
+**Example Requests:**
+```bash
+curl -X GET "https://api.example.com/jobs?filter=completed"
+```
 
 **Response:**
 ```json
 {
   "success": true,
-  "active_jobs": {
+  "jobs": {
     "12345678-1234-5678-1234-567812345678": {
       "id": "12345678-1234-5678-1234-567812345678",
       "status": "processing",
@@ -145,3 +157,5 @@ Provides basic service health information and the number of active jobs.
   "active_jobs": 2
 }
 ```
+
+**Note:** The API is designed to handle concurrent processing of multiple jobs. However, the processing time for individual jobs may vary based on the size and complexity of the audio file, as well as the current system load.

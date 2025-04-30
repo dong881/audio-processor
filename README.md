@@ -8,8 +8,8 @@ This Flask application processes audio files from Google Drive, performs speech-
 *   Converts various audio formats to WAV (16kHz, mono).
 *   Performs speech-to-text using Whisper.
 *   Performs speaker diarization using Pyannote Audio.
-*   Attempts to identify speaker names (e.g., `SPEAKER_00`) based on conversation context using Google Gemini (`gemini-1.5-flash-latest`).
-*   Generates a meeting title, summary, and to-do list using Google Gemini (`gemini-1.5-flash-latest`).
+*   Attempts to identify speaker names (e.g., `SPEAKER_00`) based on conversation context using Google Gemini (`gemini-2.5-pro-exp-03-25`).
+*   Generates a meeting title, summary, and to-do list using Google Gemini (`gemini-2.5-pro-exp-03-25`).
 *   Optionally extracts text from a PDF attachment (via Google Drive) to provide more context to Gemini for summarization.
 *   Creates a structured page in a specified Notion database with the title, summary, to-dos, and full transcript (without timestamps, using identified speaker names).
 *   **NEW**: Multi-threaded processing with job queue for handling multiple requests simultaneously.
@@ -18,6 +18,7 @@ This Flask application processes audio files from Google Drive, performs speech-
 *   **NEW**: Timestamped transcript entries in Notion output.
 *   **NEW**: Google Drive links included in the Notion page.
 *   **NEW**: Job status tracking and progress monitoring APIs.
+*   **Intelligent File Management**: Automatically renames processed audio files in Google Drive using a standardized format `[YYYY-MM-DD] Title.m4a` where the date is extracted from the original filename or defaults to the current date, and the title is generated from AI analysis.
 
 ## Documentation
 
@@ -40,6 +41,14 @@ For a quick overview of all documentation, see the [Documentation Overview](./do
 ## Detailed Workflow
 
 For a detailed step-by-step explanation of the application's internal workflow and function interactions, please see the [**Process Details Document**](./PROCESS_DETAILS.md).
+
+4. **Processing and Analysis**:
+   - The audio file is processed by Whisper for speech-to-text transcription
+   - Pyannote is used for speaker diarization (identifying different speakers)
+   - Google Gemini AI identifies likely speaker identities
+   - A title, summary, and to-do list are generated
+   - The original audio file is renamed in Google Drive with the format `[YYYY-MM-DD] Title.m4a`
+   - A comprehensive Notion page is created with all the information
 
 ## Prerequisites
 
@@ -184,15 +193,39 @@ curl http://localhost:5000/job/12345678-1234-5678-1234-567812345678
 }
 ```
 
-### List Active Jobs
+### List Jobs
 
-Send a GET request to the `/jobs` endpoint to get a list of all active jobs.
+Send a GET request to the `/jobs` endpoint to get a list of jobs with optional filtering.
 
 **Endpoint:** `GET /jobs`
 
-**Example Request:**
+**Query Parameters:**
+- `filter`: (Optional) Filter jobs by status
+  - `active`: Only pending or processing jobs (default)
+  - `all`: All jobs regardless of status
+  - `completed`: Only completed jobs
+  - `failed`: Only failed jobs
+
+**Example Requests:**
+
+List active jobs (default):
 ```bash
 curl http://localhost:5000/jobs
+```
+
+List all jobs:
+```bash
+curl http://localhost:5000/jobs?filter=all
+```
+
+List only completed jobs:
+```bash
+curl http://localhost:5000/jobs?filter=completed
+```
+
+List only failed jobs:
+```bash
+curl http://localhost:5000/jobs?filter=failed
 ```
 
 **Success Response:**
@@ -214,7 +247,9 @@ curl http://localhost:5000/jobs
       "created_at": "2023-06-10T12:38:00.123456",
       "updated_at": "2023-06-10T12:38:00.123456"
     }
-  }
+  },
+  "count": 2,
+  "timestamp": "2023-06-10T12:38:10.123456"
 }
 ```
 
@@ -288,6 +323,14 @@ If you prefer not to use the script, you can manually update the application whe
 5. View logs: `docker-compose logs -f audio-processor`
 
 This explicit step-by-step process avoids potential issues with some Docker Compose versions (particularly 1.x) that can cause errors like `KeyError: 'ContainerConfig'` when using simpler commands like `docker-compose up -d --build`.
+
+### Quick Update Command
+
+For convenience, you can use this one-liner to update the application:
+
+```bash
+docker-compose stop audio-processor && docker-compose rm -f audio-processor && docker-compose build audio-processor && docker-compose up -d && docker-compose logs -f audio-processor
+```
 
 ## Additional Dependencies
 
