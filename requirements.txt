@@ -1,20 +1,22 @@
-# Web 服務相關
+# Basic Flask dependencies
 flask==2.3.3
-gunicorn==21.2.0
-python-dotenv==1.0.0
-requests==2.31.0
+requests>=2.28.2
+gunicorn>=21.2.0
+python-dotenv>=1.0.0
 
-# Google API 相關
-google-api-python-client==2.97.0
-google-auth==2.22.0
-google-auth-oauthlib==1.0.0
-google-generativeai==0.3.1
+# Google-related libraries
+google-api-python-client>=2.100.0
+google-auth-httplib2>=0.1.0
+google-auth-oauthlib>=1.0.0
+google-auth>=2.22.0
+google-generativeai>=0.3.1
 
-# 音訊處理相關
-openai-whisper==20231117  # 使用官方 whispher
-torch==2.0.1  # 與 CUDA 不依賴的版本，適合 CPU 環境
-torchaudio==2.0.2
-pyannote.audio==3.1.1
-ffmpeg-python==0.2.0  # 提供 ffmpeg 的 Python 綁定
-soundfile==0.12.1
-numpy<2.0 # Add this line to pin NumPy version
+# Audio processing
+whisper>=1.1.10
+pyannote.audio>=2.1.1
+PyPDF2>=3.0.1
+
+# NEW: Audio preprocessing dependencies
+numpy>=1.23.5
+librosa>=0.10.1
+soundfile>=0.12.1

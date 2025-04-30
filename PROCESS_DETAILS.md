@@ -8,156 +8,204 @@ The application receives a Google Drive file ID for an audio file (and optionall
 
 1.  Downloads the audio file (and attachment if provided).
 2.  Extracts text from the PDF attachment (if applicable).
-3.  Converts the audio file to a standard WAV format.
-4.  Transcribes the audio using Whisper.
-5.  Performs speaker diarization using Pyannote.
-6.  Attempts to identify speaker names using Google Gemini.
-7.  Generates a title, summary, and to-do list using Google Gemini, incorporating the transcript, identified speakers, and optional attachment text.
-8.  Creates a new page in a Notion database containing the generated summary, to-dos, and the full transcript with identified speaker names.
+3.  Preprocesses the audio file to remove silence.
+4.  Converts the audio file to a standard WAV format.
+5.  Transcribes the audio using Whisper.
+6.  Performs speaker diarization using Pyannote.
+7.  Attempts to identify speaker names using Google Gemini.
+8.  Generates a title, summary, and to-do list using Google Gemini, incorporating the transcript, identified speakers, and optional attachment text.
+9.  Creates a new page in a Notion database containing the generated summary, to-dos, and the full transcript with identified speaker names and timestamps.
+10. Renames the original audio file in Google Drive to include the generated title.
 
-## Main Workflow (`process_file` function)
+The application now processes files asynchronously using a thread pool, allowing it to handle multiple requests simultaneously.
 
-The core logic resides in the `process_file` function. Here's a sequence diagram illustrating the flow:
+## Main Workflow
+
+The core logic now resides in the `_process_file_job` function which executes in a background thread. Here's an updated sequence diagram illustrating the flow:
 
 ```mermaid
 sequenceDiagram
+    participant Client
     participant API as API Endpoint (/process)
-    participant PF as process_file
-    participant AT as download_and_extract_text
+    participant JobMgr as Job Manager
+    participant Worker as Worker Thread
     participant DD as download_from_drive
     participant PA as process_audio
     participant IS as identify_speakers
     participant GS as generate_summary
     participant CNP as create_notion_page
+    participant Drive as Google Drive API
 
-    API->>PF: Start processing(audio_file_id, attachment_file_id?)
-    alt Attachment Provided
-        PF->>AT: download_and_extract_text(attachment_file_id)
-        AT-->>PF: attachment_text, temp_dir
-    end
-    PF->>DD: download_from_drive(audio_file_id)
-    DD-->>PF: audio_path, temp_dir
-    PF->>PA: process_audio(audio_path)
-    PA-->>PF: segments, original_speakers
-    PF->>IS: identify_speakers(segments, original_speakers)
-    IS-->>PF: speaker_map
-    Note over PF: Update segments with identified names,\nCombine transcript for summary
-    PF->>GS: generate_summary(transcript_for_summary, attachment_text?)
-    GS-->>PF: summary_data (title, summary, todos)
-    PF->>CNP: create_notion_page(title, summary, todos, updated_segments)
-    CNP-->>PF: page_id, page_url
-    PF-->>API: Success response (page_id, url, title, etc.)
-    deactivate PF
-
-    alt Error Occurs
-        PF-->>API: Error response
-    end
-
-    Note right of PF: Temporary directories are cleaned up in 'finally' block.
+    Client->>API: POST /process (file_id, attachment_file_id?)
+    API->>JobMgr: Create job ID & submit to thread pool
+    JobMgr-->>API: Return job ID
+    API-->>Client: Return job ID (immediate response)
+    
+    Worker->>Worker: Start _process_file_job
+    
+    Worker->>DD: download_from_drive(audio_file_id)
+    DD-->>Worker: audio_path, temp_dir
+    
+    Worker->>Worker: preprocess_audio (remove silence)
+    
+    Worker->>PA: process_audio(audio_path)
+    PA-->>Worker: segments, original_speakers
+    
+    Worker->>IS: identify_speakers(segments, original_speakers)
+    IS-->>Worker: speaker_map
+    
+    Worker->>GS: generate_summary(transcript_for_summary, attachment_text?)
+    GS-->>Worker: summary_data (title, summary, todos)
+    
+    Worker->>CNP: create_notion_page(title, summary, todos, updated_segments)
+    CNP-->>Worker: page_id, page_url
+    
+    Worker->>Drive: rename_drive_file(file_id, new_name)
+    Drive-->>Worker: Success/failure
+    
+    Worker->>JobMgr: Update job status as COMPLETED
+    
+    Client->>API: GET /job/{job_id} (polling)
+    API->>JobMgr: Get job status
+    JobMgr-->>API: Return current status, progress, and result if done
+    API-->>Client: Return job status information
 ```
 
 ## Function Details
 
-### `download_from_drive(file_id)`
+### New Functions
 
-*   **Purpose:** Downloads a file from Google Drive using its ID.
-*   **Input:** `file_id` (string) - The Google Drive file ID.
+#### `process_file_async(file_id, attachment_file_id)`
+
+*   **Purpose:** Creates an asynchronous job for file processing and returns a job ID.
+*   **Input:** `file_id` (string), `attachment_file_id` (optional string).
 *   **Process:**
-    1.  Creates a unique temporary directory using `tempfile.mkdtemp()`.
-    2.  Uses the Google Drive API (`self.drive_service`) to get file metadata (name, MIME type).
-    3.  Constructs the local download path within the temporary directory.
-    4.  Uses `MediaIoBaseDownload` to download the file content in chunks.
-*   **Output:** `(local_path, temp_dir)` (tuple) - The full path to the downloaded file and the path to the temporary directory created.
-*   **Error Handling:** Raises exceptions on API errors or download failures; cleans up the temporary directory on failure.
+    1.  Generates a unique job ID using `uuid.uuid4()`.
+    2.  Creates a job entry with initial status "pending" and stores it in the `jobs` dictionary.
+    3.  Submits the `_process_file_job` function to the thread pool with the job ID and file IDs.
+*   **Output:** `job_id` (string) - A unique ID for tracking the job.
+*   **Error Handling:** Any exceptions are caught in the API endpoint and returned as errors.
 
-### `download_and_extract_text(file_id)`
+#### `_process_file_job(job_id, file_id, attachment_file_id)`
 
-*   **Purpose:** Downloads a file (currently only PDF) from Google Drive and extracts its text content.
-*   **Input:** `file_id` (string) - The Google Drive file ID of the attachment.
+*   **Purpose:** Background worker function that processes the audio file and updates job status.
+*   **Input:** `job_id` (string), `file_id` (string), `attachment_file_id` (optional string).
 *   **Process:**
-    1.  Gets file metadata to check the MIME type.
-    2.  If not a PDF or `PyPDF2` is not installed, returns `(None, None)`.
-    3.  Calls `download_from_drive` to get the file locally.
-    4.  Opens the downloaded PDF using `PyPDF2.PdfReader`.
-    5.  Iterates through pages, extracting text using `page.extract_text()`.
-    6.  Concatenates text from all pages.
-*   **Output:** `(text, temp_dir)` (tuple) - The extracted text content (or `None` if failed/not supported) and the path to the temporary directory used for download.
-*   **Error Handling:** Catches exceptions during download or PDF parsing; returns `(None, temp_dir)` or `(None, None)`. The temporary directory is *not* cleaned here; cleanup is handled by `process_file`.
+    1.  Updates job status to "processing" and sets progress to 5%.
+    2.  Processes the file with regular status updates at key milestones.
+    3.  Upon completion, updates job status to "completed" and stores result.
+    4.  If an error occurs, updates job status to "failed" and stores error information.
+*   **Output:** Result dictionary (not directly returned but stored in job record).
+*   **Error Handling:** Catches all exceptions, logs them, and updates job status to "failed".
 
-### `convert_to_wav(input_path)`
+#### `get_job_status(job_id)`
 
-*   **Purpose:** Converts an audio file to WAV format (16kHz, 16-bit PCM, mono) using FFmpeg. This is required for Whisper and Pyannote.
-*   **Input:** `input_path` (string) - Path to the input audio file.
+*   **Purpose:** Retrieves the current status and details of a processing job.
+*   **Input:** `job_id` (string) - The unique job ID.
 *   **Process:**
-    1.  Creates a temporary WAV file path in the same directory as the input.
-    2.  Constructs an `ffmpeg` command with the specified conversion parameters (`-acodec pcm_s16le`, `-ar 16000`, `-ac 1`).
-    3.  Executes the command using `subprocess.run`.
-*   **Output:** `output_path` (string) - Path to the converted WAV file.
-*   **Error Handling:** Raises `RuntimeError` if `ffmpeg` fails, logging stderr.
+    1.  Retrieves the job record from the `jobs` dictionary.
+    2.  Returns appropriate information based on job status.
+*   **Output:** Dictionary with job details including status, progress, and results if completed.
+*   **Error Handling:** Returns error information if the job ID is not found.
 
-### `process_audio(audio_path)`
+#### `preprocess_audio(audio_path)`
 
-*   **Purpose:** Orchestrates audio-to-text transcription and speaker diarization.
-*   **Input:** `audio_path` (string) - Path to the audio file (preferably WAV).
+*   **Purpose:** Preprocesses audio to improve processing efficiency by removing silence.
+*   **Input:** `audio_path` (string) - Path to the audio file.
 *   **Process:**
-    1.  Calls `load_models()` to ensure Whisper and Pyannote models are loaded.
-    2.  If the input is not WAV, calls `convert_to_wav()` and updates `audio_path`.
-    3.  **Transcription:** Calls `self.whisper_model.transcribe()` on the audio path.
-    4.  **Diarization:** Calls `self.diarization_pipeline()` on the audio path.
-    5.  **Integration:**
-        *   Iterates through text segments from Whisper.
-        *   For each segment, determines the dominant speaker by finding which speaker label from Pyannote's output overlaps the most with the segment's timeframe.
-        *   Stores segment data (speaker label, start, end, text).
-        *   Collects unique original speaker labels (e.g., `SPEAKER_00`, `SPEAKER_01`).
-*   **Output:** `(transcript_full, segments, original_speakers)` (tuple) - `transcript_full` (currently unused string), `segments` (list of dictionaries), `original_speakers` (list of unique speaker labels found).
+    1.  Loads the audio file using librosa.
+    2.  Detects non-silent intervals using librosa.effects.split.
+    3.  Creates a new audio file containing only the non-silent segments.
+    4.  Calculates time savings from silence removal.
+*   **Output:** `processed_path` (string) - Path to the processed audio file.
+*   **Error Handling:** Returns the original path if preprocessing fails or if no non-silent segments are detected.
 
-### `identify_speakers(segments, original_speakers)`
+#### `rename_drive_file(file_id, new_name)`
 
-*   **Purpose:** Attempts to map generic speaker labels (e.g., `SPEAKER_00`) to actual names mentioned in the conversation using Google Gemini.
-*   **Input:** `segments` (list), `original_speakers` (list).
+*   **Purpose:** Renames a file in Google Drive using the Drive API.
+*   **Input:** `file_id` (string) - Google Drive file ID, `new_name` (string) - New filename.
 *   **Process:**
-    1.  Checks if identification is possible (skips if no speakers or '未知' is present).
-    2.  Constructs a prompt for Gemini, including the conversation transcript (with original speaker labels) and instructions to return a JSON mapping.
-    3.  Calls the Gemini API (`genai.GenerativeModel('gemini-1.5-flash-latest').generate_content()`).
-    4.  Parses the response, expecting a JSON object like `{"SPEAKER_00": "Alice", "SPEAKER_01": "SPEAKER_01"}`.
-    5.  Validates the response format and ensures all original speakers are present in the map (uses original label if missing or invalid).
-*   **Output:** `speaker_map` (dict) - A dictionary mapping original labels to identified names (or original labels if identification failed).
-*   **Error Handling:** Catches API errors or JSON parsing errors; returns the original labels mapped to themselves on failure.
+    1.  Calls the Drive API files().update method with the new name.
+    2.  Logs the success or failure.
+*   **Output:** `success` (boolean) - True if renaming succeeded, False if it failed.
+*   **Error Handling:** Catches and logs API exceptions, returning False on failure.
 
-### `generate_summary(transcript, attachment_text=None)`
+#### `format_timestamp(seconds)`
 
-*   **Purpose:** Generates a meeting title, summary, and to-do list using Google Gemini, based on the transcript and optional attachment text.
-*   **Input:** `transcript` (string - with identified speaker names), `attachment_text` (optional string).
+*   **Purpose:** Converts a time value in seconds to a readable timestamp format.
+*   **Input:** `seconds` (float) - Time in seconds.
 *   **Process:**
-    1.  Checks if the transcript is valid.
-    2.  Constructs a detailed prompt for Gemini, including the transcript, optional attachment text, and strict instructions to return *only* a JSON object with `title`, `summary`, and `todos` keys.
-    3.  **Retry Loop (up to 3 attempts):**
-        *   Calls the Gemini API (`genai.GenerativeModel('gemini-1.5-flash-latest').generate_content()`).
-        *   Logs the raw API response.
-        *   Attempts to parse the response as JSON (handling potential markdown wrappers ` ```json ... ``` `).
-        *   Validates the presence and types of required keys (`title`, `summary`, `todos`).
-        *   If successful, returns the parsed data.
-        *   If an error occurs (API error, JSON parsing, validation), logs the error and retries after a short delay.
-*   **Output:** `summary_data` (dict) - A dictionary containing `title`, `summary`, and `todos`. If all attempts fail, returns a fallback dictionary indicating failure.
-*   **Error Handling:** Includes retries, robust JSON parsing, validation, and returns a fallback dictionary on persistent failure.
+    1.  Converts seconds to hours, minutes, seconds format.
+    2.  Returns a formatted string.
+*   **Output:** `timestamp` (string) - Formatted timestamp (MM:SS or HH:MM:SS).
 
-### `create_notion_page(title, summary, todos, segments)`
+### Modified Functions
+
+#### `create_notion_page(title, summary, todos, segments, speaker_map, file_id)`
 
 *   **Purpose:** Creates a new page in a pre-configured Notion database.
-*   **Input:** `title` (string), `summary` (string), `todos` (list of strings), `segments` (list of dictionaries with *identified* speaker names).
+*   **Input:** `title` (string), `summary` (string), `todos` (list of strings), `segments` (list of dictionaries), `speaker_map` (dictionary), `file_id` (optional string).
 *   **Process:**
     1.  Retrieves Notion API token and Database ID from environment variables.
-    2.  Constructs the Notion page content as a list of blocks (headings, paragraphs, to-do items) using the Notion API block structure.
-        *   Summary and To-Do sections are created.
-        *   A "完整記錄" section is added.
-        *   Each segment from the input `segments` is added as a paragraph block formatted as `[Speaker Name]: Text`. Timestamps are omitted.
-    3.  Constructs the API request payload, including the parent database ID, page title (with current date).
+    2.  If file_id is provided, gets file info and adds a link to the source file.
+    3.  Constructs the Notion page content as a list of blocks.
     4.  Uses a batch processing approach to handle the Notion API's 100-block limit per request:
         *   First creates a page with essential content (metadata, participants, summary, to-dos)
-        *   Then appends transcript segments in batches of up to 100 blocks per request
-        *   Includes rate limiting between batch requests to avoid API throttling
-    5.  Sends requests to the Notion API endpoints:
-        *   Initial page creation: `https://api.notion.com/v1/pages`
-        *   Batch append: `https://api.notion.com/v1/blocks/{page_id}/children`
+        *   Then appends transcript segments with timestamps in batches of up to 100 blocks per request
+    5.  Sends requests to the Notion API endpoints.
 *   **Output:** `(page_id, page_url)` (tuple) - The ID and URL of the newly created Notion page.
 *   **Error Handling:** Raises exceptions on Notion API errors, logging response details. Handles batch failures gracefully, continuing with subsequent batches.
+
+#### `process_audio(audio_path)`
+
+*   **Purpose:** Processes audio for transcription and diarization with preprocessing.
+*   **Input:** `audio_path` (string) - Path to the audio file.
+*   **Process:**
+    1.  Loads required models.
+    2.  Converts to WAV format if needed.
+    3.  **New step:** Calls `preprocess_audio` to remove silence.
+    4.  Performs transcription and diarization as before.
+*   **Output:** Same as before.
+*   **Error Handling:** Same as before, with additional handling for preprocessing errors.
+
+## API Endpoints
+
+### `/process` (POST)
+
+*   **Purpose:** Submits a file for asynchronous processing.
+*   **Input:** JSON with `file_id` and optional `attachment_file_id`.
+*   **Process:**
+    1.  Validates the input parameters.
+    2.  Creates an async job by calling `process_file_async`.
+    3.  Returns the job ID immediately.
+*   **Output:** JSON with `success` status, confirmation message, and `job_id`.
+*   **Error Handling:** Returns error details with 400 or 500 status code.
+
+### `/job/<job_id>` (GET)
+
+*   **Purpose:** Retrieves the status of a processing job.
+*   **Input:** `job_id` in URL path.
+*   **Process:**
+    1.  Calls `get_job_status` to get information about the job.
+    2.  Returns the job information.
+*   **Output:** JSON with job status, progress, and results if complete.
+*   **Error Handling:** Returns 404 if job not found, 500 on server errors.
+
+### `/jobs` (GET)
+
+*   **Purpose:** Lists all active (pending or processing) jobs.
+*   **Input:** None.
+*   **Process:**
+    1.  Filters the `jobs` dictionary for jobs with "pending" or "processing" status.
+    2.  Returns basic information about each active job.
+*   **Output:** JSON with a dictionary of active jobs.
+*   **Error Handling:** Returns 500 on server errors.
+
+### `/health` (GET)
+
+*   **Purpose:** Health check endpoint with active job count.
+*   **Input:** None.
+*   **Process:**
+    1.  Returns service status, current timestamp, and count of active jobs.
+*   **Output:** JSON with status information.
+*   **Error Handling:** None specific; general server error handling applies.

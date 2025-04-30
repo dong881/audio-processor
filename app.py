@@ -7,9 +7,12 @@ import io
 import json
 import re
 import time
-import logging  # Import logging
+import logging
+import uuid
+import threading
 from datetime import datetime
 from typing import Dict, List, Tuple, Any, Optional
+from concurrent.futures import ThreadPoolExecutor
 
 # Flask 相關
 from flask import Flask, request, jsonify
@@ -24,6 +27,9 @@ from googleapiclient.http import MediaIoBaseDownload
 # 語音處理相關
 import whisper
 from pyannote.audio import Pipeline
+import numpy as np
+import soundfile as sf
+import librosa
 
 # LLM API 相關
 import google.generativeai as genai
@@ -44,11 +50,26 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 app = Flask(__name__)
 
+# 工作狀態定義
+JOB_STATUS = {
+    'PENDING': 'pending',     # 等待處理
+    'PROCESSING': 'processing', # 處理中
+    'COMPLETED': 'completed',   # 處理完成
+    'FAILED': 'failed'        # 處理失敗
+}
+
 class AudioProcessor:
-    def __init__(self):
+    def __init__(self, max_workers=3):
         self.whisper_model = None
         self.diarization_pipeline = None
         self.drive_service = None
+        # 初始化執行緒池
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        # 工作狀態追蹤
+        self.jobs = {}
+        # 確保線程安全的鎖
+        self.jobs_lock = threading.Lock()
+        # 初始化服務
         self.init_services()
 
     def init_services(self):
@@ -60,13 +81,13 @@ class AudioProcessor:
             # 使用服務帳號
             credentials = service_account.Credentials.from_service_account_file(
                 os.getenv("GOOGLE_SA_JSON_PATH"),
-                scopes=['https://www.googleapis.com/auth/drive.readonly']
+                scopes=['https://www.googleapis.com/auth/drive']  # 增加寫入權限
             )
         else:
             # 使用 OAuth 憑證
             credentials = Credentials.from_authorized_user_file(
                 os.getenv("GOOGLE_CREDS_JSON_PATH"),
-                scopes=['https://www.googleapis.com/auth/drive.readonly']
+                scopes=['https://www.googleapis.com/auth/drive']  # 增加寫入權限
             )
         
         self.drive_service = build('drive', 'v3', credentials=credentials)
@@ -75,106 +96,699 @@ class AudioProcessor:
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
         
         logging.info("✅ 服務初始化完成")
-
-    def load_models(self):
-        """懶加載 AI 模型，節省記憶體"""
-        logging.info("🔄 載入AI模型...")
-        
-        # 載入 Whisper 模型 (如果尚未載入)
-        if self.whisper_model is None:
-            logging.info("- 載入 Whisper 模型 (medium)...")
-            # Use a larger model for potentially better accuracy
-            self.whisper_model = whisper.load_model("medium")
-            logging.info("- Whisper 模型載入完成")
-        
-        # 載入 Pyannote 模型 (如果尚未載入)
-        if self.diarization_pipeline is None:
-            logging.info("- 載入 Pyannote 說話人分離模型...")
-            self.diarization_pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
-                use_auth_token=os.getenv("HF_TOKEN")
-            )
-            logging.info("- Pyannote 模型載入完成")
-            
-        logging.info("✅ 所有AI模型載入完成")
-
+    
     def download_from_drive(self, file_id: str) -> Tuple[str, str]:
         """從 Google Drive 下載檔案到臨時目錄"""
-        logging.info(f"🔄 從 Google Drive 下載檔案 (ID: {file_id})...")
-
-        # 建立臨時目錄
-        temp_dir = tempfile.mkdtemp()
-
+        logging.info(f"🔄 從 Google Drive 下載檔案 (ID: {file_id})")
+        
         try:
-            # 取得檔案資訊
+            # 建立臨時目錄
+            temp_dir = tempfile.mkdtemp()
+            
+            # 獲取文件資訊
             file_meta = self.drive_service.files().get(
                 fileId=file_id, fields="name,mimeType"
             ).execute()
             
-            filename = file_meta.get('name', f'audio_{file_id}')
-            mime_type = file_meta.get('mimeType', '')
-            
-            logging.info(f"- 檔案名稱: {filename}")
-            logging.info(f"- MIME類型: {mime_type}")
-            
-            # 建立本地檔案路徑
-            local_path = os.path.join(temp_dir, filename)
+            file_name = file_meta.get('name', f"file_{file_id}")
+            local_path = os.path.join(temp_dir, file_name)
             
             # 下載檔案
             request = self.drive_service.files().get_media(fileId=file_id)
-            with io.FileIO(local_path, 'wb') as fh:
-                downloader = MediaIoBaseDownload(fh, request)
+            
+            with open(local_path, 'wb') as f:
+                downloader = MediaIoBaseDownload(f, request)
                 done = False
                 while not done:
                     status, done = downloader.next_chunk()
-                    logging.info(f"- 下載進度: {int(status.progress() * 100)}%")
+                    logging.debug(f"下載進度: {int(status.progress() * 100)}%")
             
-            logging.info(f"✅ 檔案下載完成: {local_path}")
+            logging.info(f"✅ 檔案下載完成: {file_name} (儲存於 {temp_dir})")
             return local_path, temp_dir
             
         except Exception as e:
-            logging.error(f"❌ 檔案下載失敗: {str(e)}")
-            shutil.rmtree(temp_dir)
+            logging.error(f"❌ 下載檔案失敗: {str(e)}")
+            if 'temp_dir' in locals() and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
             raise
-
-    def convert_to_wav(self, input_path: str) -> str:
-        """將音檔轉換為 WAV 格式 (16kHz, 單聲道)"""
-        logging.info(f"🔄 轉換檔案格式: {os.path.basename(input_path)} -> WAV")
+    
+    def download_and_extract_text(self, file_id: str) -> Tuple[Optional[str], Optional[str]]:
+        """下載並提取 PDF 文字內容"""
+        try:
+            # 獲取文件資訊
+            file_meta = self.drive_service.files().get(
+                fileId=file_id, fields="name,mimeType"
+            ).execute()
+            
+            mime_type = file_meta.get('mimeType', '')
+            
+            # 目前僅支持 PDF
+            if mime_type != 'application/pdf' or PyPDF2 is None:
+                return None, None
+            
+            # 下載文件
+            local_path, temp_dir = self.download_from_drive(file_id)
+            
+            # 提取 PDF 文字
+            text = ""
+            with open(local_path, 'rb') as f:
+                reader = PyPDF2.PdfReader(f)
+                for page in reader.pages:
+                    text += page.extract_text()
+            
+            return text, temp_dir
+        except Exception as e:
+            logging.error(f"❌ 提取PDF文字失敗: {str(e)}")
+            if 'temp_dir' in locals() and temp_dir:
+                return None, temp_dir
+            return None, None
+    
+    def preprocess_audio(self, audio_path: str) -> str:
+        """預處理音頻以提高處理效率 (移除靜音片段)"""
+        logging.info(f"🔄 預處理音頻: {os.path.basename(audio_path)}")
         
-        # 在相同目錄中建立暫存 WAV 檔案
-        dir_path = os.path.dirname(input_path)
-        temp_wav = tempfile.NamedTemporaryFile(
-            suffix=".wav", delete=False, dir=dir_path
-        )
-        temp_wav.close()
-        
-        # 使用 FFmpeg 進行轉換
-        cmd = [
-            'ffmpeg', '-y',
-            '-i', input_path,
-            '-acodec', 'pcm_s16le',  # 16-bit PCM
-            '-ar', '16000',          # 16kHz 取樣率
-            '-ac', '1',              # 單聲道
-            temp_wav.name
-        ]
+        # 確保檔案為 WAV 格式
+        if not audio_path.lower().endswith('.wav'):
+            audio_path = self.convert_to_wav(audio_path)
         
         try:
-            result = subprocess.run(
-                cmd, 
-                check=True, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.PIPE
+            # 檢查檔案是否存在且有效
+            if not os.path.isfile(audio_path) or os.path.getsize(audio_path) == 0:
+                logging.warning(f"⚠️ 音頻檔案不存在或為空: {audio_path}")
+                return audio_path
+                
+            # 使用 librosa 載入音頻
+            y, sr = librosa.load(audio_path, sr=None)
+            
+            # 檢查音頻資料是否有效
+            if len(y) == 0:
+                logging.warning("⚠️ 音頻資料為空，返回原始檔案")
+                return audio_path
+            
+            # 檢測非靜音片段
+            non_silent_intervals = librosa.effects.split(
+                y, top_db=20, frame_length=1024, hop_length=256
             )
-            logging.info(f"✅ 轉換成功: {temp_wav.name}")
-            return temp_wav.name
+            
+            # 如果沒有檢測到非靜音片段，返回原始檔案
+            if len(non_silent_intervals) == 0:
+                logging.warning("⚠️ 無法檢測到非靜音片段，返回原始檔案")
+                return audio_path
+            
+            # 建立新的音頻，移除靜音
+            processed_audio = np.concatenate(
+                [y[start:end] for start, end in non_silent_intervals]
+            )
+            
+            # 確保處理後的音頻不為空
+            if len(processed_audio) == 0:
+                logging.warning("⚠️ 處理後音頻為空，返回原始檔案")
+                return audio_path
+            
+            # 存儲處理後的音頻
+            processed_path = os.path.join(
+                os.path.dirname(audio_path),
+                f"processed_{os.path.basename(audio_path)}"
+            )
+            sf.write(processed_path, processed_audio, sr)
+            
+            # 驗證生成的檔案
+            if not os.path.isfile(processed_path) or os.path.getsize(processed_path) == 0:
+                logging.warning("⚠️ 處理後檔案無效，返回原始檔案")
+                return audio_path
+                
+            logging.info(f"✅ 音頻預處理完成: 移除了靜音片段")
+            
+            # 計算節省的時間百分比
+            original_duration = len(y) / sr
+            processed_duration = len(processed_audio) / sr
+            saved_percentage = (1 - processed_duration / original_duration) * 100
+            logging.info(f"   - 原始長度: {original_duration:.2f}秒, 處理後長度: {processed_duration:.2f}秒")
+            logging.info(f"   - 節省了 {saved_percentage:.2f}% 的處理時間")
+            
+            # 確保處理後的檔案長度不為零，避免後續處理問題
+            if processed_duration < 0.5:  # 如果太短（少於0.5秒）
+                logging.warning("⚠️ 處理後音頻太短，返回原始檔案")
+                return audio_path
+                
+            return processed_path
+            
+        except Exception as e:
+            logging.error(f"❌ 音頻預處理失敗: {str(e)}")
+            return audio_path
+
+    def rename_drive_file(self, file_id: str, new_name: str) -> bool:
+        """根據處理結果重命名 Google Drive 上的檔案"""
+        try:
+            self.drive_service.files().update(
+                fileId=file_id,
+                body={'name': new_name}
+            ).execute()
+            logging.info(f"✅ 成功重命名 Google Drive 檔案: {new_name}")
+            return True
+        except Exception as e:
+            logging.error(f"❌ 重命名 Google Drive 檔案失敗: {str(e)}")
+            return False
+        
+    def format_timestamp(self, seconds: float) -> str:
+            """將秒數轉換為可讀時間戳記"""
+            minutes, seconds = divmod(int(seconds), 60)
+            hours, minutes = divmod(minutes, 60)
+            
+            if hours > 0:
+                return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                return f"{minutes:02d}:{seconds:02d}"
+            
+    def generate_comprehensive_notes(self, transcript: str) -> str:
+        """使用 Gemini API 進行迭代分析，生成結構化的完整筆記"""
+        logging.info("🔄 生成完整筆記...")
+        
+        try:
+            # 第一階段：分析重點
+            system_prompt_1 = """
+            你是一位專業會議記錄專家。請分析以下會議記錄，找出所有重要的討論點、決策和關鍵信息。
+            列出所有重要主題和各個主題下的關鍵點。請確保涵蓋所有重要資訊，但避免冗餘內容。
+            格式要求：以大綱形式呈現，使用明確的標題和子標題。
+            """
+            
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            response_1 = model.generate_content(
+                [
+                    system_prompt_1,
+                    f"會議記錄：\n{transcript}"
+                ]
+            )
+            
+            key_points = response_1.text
+            
+            # 第二階段：重組為完整筆記
+            system_prompt_2 = """
+            你是一位專業文檔編輯。請根據下面提供的會議重點內容，創建一份結構完整、組織良好的會議筆記。
+            筆記應該包含：
+            1. 清晰的主題分類
+            2. 各個主題的詳細討論內容
+            3. 所有決策和行動項目
+            4. 總結和後續步驟
+            
+            格式要求：
+            - 使用適當的標題和小標題
+            - 段落結構清晰
+            - 重點內容應該被強調
+            - 適當使用項目符號列表表示相關項目
+            
+            請確保筆記內容專業、簡潔且易於理解。
+            """
+            
+            response_2 = model.generate_content(
+                [
+                    system_prompt_2,
+                    f"以下是會議重點內容：\n{key_points}"
+                ]
+            )
+            
+            comprehensive_notes = response_2.text
+            logging.info("✅ 完整筆記生成成功")
+            return comprehensive_notes
+            
+        except Exception as e:
+            logging.error(f"❌ 完整筆記生成失敗: {str(e)}")
+            return "筆記生成失敗，請參考會議摘要和完整記錄。"
+
+    def create_notion_page(self, title: str, summary: str, todos: List[str], segments: List[Dict[str, Any]], speaker_map: Dict[str, str], file_id: str = None) -> Tuple[str, str]:
+        """建立單一 Notion 頁面，包含標題、日期、參與者、摘要、待辦事項、完整筆記與內嵌的逐字稿"""
+        logging.info("🔄 建立 Notion 頁面...")
+
+        notion_token = os.getenv("NOTION_TOKEN")
+        database_id = os.getenv("NOTION_DATABASE_ID")
+
+        if not notion_token or not database_id:
+            raise ValueError("缺少 Notion API 設定")
+
+        # --- 準備頁面內容區塊 ---
+        blocks = []
+        current_date = datetime.now()
+        current_date_str = current_date.strftime("%Y-%m-%d")
+        formatted_date = current_date.strftime("%Y年%m月%d日")
+
+        # --- 標題區塊 (使用日期+錄音檔案名稱) ---
+        page_title = f"{formatted_date} {title}"
+
+        # --- 錄音檔案連結 ---
+        if file_id:
+            try:
+                file_info = self.drive_service.files().get(
+                    fileId=file_id, fields="name,webViewLink"
+                ).execute()
+                file_name = file_info.get('name', '音頻檔案')
+                file_link = file_info.get('webViewLink', f"https://drive.google.com/file/d/{file_id}/view")
+                
+                blocks.append({
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {"type": "text", "text": {"content": "📁 錄音檔案: "}},
+                            {"type": "text", "text": {"content": file_name, "link": {"url": file_link}}}
+                        ]
+                    }
+                })
+                blocks.append({"object": "block", "type": "divider", "divider": {}})
+            except Exception as e:
+                logging.error(f"❌ 獲取檔案連結失敗: {str(e)}")
+
+        # --- 參與者區塊 ---
+        participants = list(set(speaker_map.values()))  # 獲取唯一識別的名稱
+        if participants:
+            blocks.append({
+                "object": "block",
+                "type": "heading_2",
+                "heading_2": {
+                    "rich_text": [{"type": "text", "text": {"content": "👥 參與者"}}]
+                }
+            })
+            participant_text = ", ".join(participants)
+            blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": participant_text}}]
+                }
+            })
+            blocks.append({"object": "block", "type": "divider", "divider": {}})
+
+        # --- 摘要區塊 ---
+        blocks.append({
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {
+                "rich_text": [{"type": "text", "text": {"content": "📝 摘要"}}]
+            }
+        })
+        blocks.append({
+            "object": "block",
+            "type": "callout",
+            "callout": {
+                "rich_text": [{"type": "text", "text": {"content": summary}}],
+                "icon": {"emoji": "💡"}
+            }
+        })
+        blocks.append({"object": "block", "type": "divider", "divider": {}})
+
+        # --- 待辦事項區塊 ---
+        if todos:
+            blocks.append({
+                "object": "block",
+                "type": "heading_2",
+                "heading_2": {
+                    "rich_text": [{"type": "text", "text": {"content": "✅ 待辦事項"}}]
+                }
+            })
+            
+            # 使用 toggle list 呈現待辦事項
+            todo_blocks = []
+            for todo in todos:
+                todo_blocks.append({
+                    "object": "block",
+                    "type": "to_do",
+                    "to_do": {
+                        "rich_text": [{"type": "text", "text": {"content": todo}}],
+                        "checked": False
+                    }
+                })
+            
+            blocks.extend(todo_blocks)
+            blocks.append({"object": "block", "type": "divider", "divider": {}})
+
+        # --- 處理完整逐字稿 (無時間戳記) ---
+        full_transcript = ""
+        clean_transcript = ""
+        
+        for segment in segments:
+            speaker = segment["speaker"]
+            text = segment["text"]
+            content = f"{speaker}: {text}"
+            full_transcript += f"{content}\n"
+            
+            # 清理版本 (僅顯示講者和內容，無時間戳記)
+            clean_transcript += f"{speaker}: {text}\n\n"
+
+        # --- 生成完整筆記 ---
+        comprehensive_notes = self.generate_comprehensive_notes(full_transcript)
+        
+        # --- 完整筆記區塊 ---
+        blocks.append({
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {
+                "rich_text": [{"type": "text", "text": {"content": "📊 詳細筆記"}}]
+            }
+        })
+        
+        # 使用引言區塊來突出顯示詳細筆記
+        blocks.append({
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": comprehensive_notes}}]
+            }
+        })
+        blocks.append({"object": "block", "type": "divider", "divider": {}})
+
+        # --- 內嵌完整逐字稿區塊 (使用 toggle 區塊) ---
+        blocks.append({
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {
+                "rich_text": [{"type": "text", "text": {"content": "🎙️ 完整逐字稿"}}]
+            }
+        })
+        
+        # 將逐字稿分成多個段落 (因為 Notion API 有字符限制)
+        clean_paragraphs = self._split_transcript_into_blocks(clean_transcript)
+        
+        # 使用 toggle 收納逐字稿
+        blocks.append({
+            "object": "block",
+            "type": "toggle",
+            "toggle": {
+                "rich_text": [{"type": "text", "text": {"content": "點擊展開完整逐字稿"}}],
+                "children": [
+                    {
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {
+                            "rich_text": [{"type": "text", "text": {"content": "此區塊包含完整逐字稿內容"}}]
+                        }
+                    }
+                ]
+            }
+        })
+        
+        headers = {
+            "Authorization": f"Bearer {notion_token}",
+            "Content-Type": "application/json",
+            "Notion-Version": "2022-06-28"
+        }
+
+        try:
+            # 建立主頁面 (包含所有基本信息)
+            data = {
+                "parent": {"database_id": database_id},
+                "properties": {
+                    "title": {
+                        "title": [{"text": {"content": page_title}}]
+                    }
+                },
+                "children": blocks
+            }
+            
+            logging.info(f"- 建立 Notion 頁面")
+            response = requests.post(
+                "https://api.notion.com/v1/pages",
+                headers=headers,
+                json=data
+            )
+            response.raise_for_status()
+            result = response.json()
+            page_id = result["id"]
+            page_url = result.get("url", f"https://www.notion.so/{page_id.replace('-', '')}")
+            
+            # 分批添加逐字稿內容到 toggle 區塊
+            toggle_block_id = None
+            for block in result.get("children", []):
+                if block.get("type") == "toggle":
+                    toggle_block_id = block["id"]
+                    break
+                    
+            # 如果找不到 toggle 區塊，使用頁面 ID
+            if not toggle_block_id:
+                # 獲取所有頂層區塊
+                blocks_response = requests.get(
+                    f"https://api.notion.com/v1/blocks/{page_id}/children",
+                    headers=headers
+                )
+                blocks_response.raise_for_status()
+                blocks_result = blocks_response.json()
+                
+                # 查找 toggle 區塊
+                for block in blocks_result.get("results", []):
+                    if block.get("type") == "toggle":
+                        toggle_block_id = block["id"]
+                        break
+            
+            # 分批添加逐字稿內容
+            if toggle_block_id and clean_paragraphs:
+                batch_size = 50  # 較小的批次大小，以避免 API 限制
+                total_batches = (len(clean_paragraphs) + batch_size - 1) // batch_size
+                
+                logging.info(f"- 開始分批添加逐字稿內容 (共 {len(clean_paragraphs)} 段，分 {total_batches} 批)")
+                
+                for i in range(0, len(clean_paragraphs), batch_size):
+                    batch_num = i // batch_size + 1
+                    end_idx = min(i + batch_size, len(clean_paragraphs))
+                    current_batch = []
+                    
+                    for para in clean_paragraphs[i:end_idx]:
+                        current_batch.append({
+                            "object": "block",
+                            "type": "paragraph",
+                            "paragraph": {
+                                "rich_text": [{"type": "text", "text": {"content": para}}]
+                            }
+                        })
+                    
+                    try:
+                        append_response = requests.patch(
+                            f"https://api.notion.com/v1/blocks/{toggle_block_id}/children",
+                            headers=headers,
+                            json={"children": current_batch}
+                        )
+                        append_response.raise_for_status()
+                        
+                        # 添加延遲以避免頻率限制
+                        if i + batch_size < len(clean_paragraphs):
+                            time.sleep(0.5)
+                    except Exception as batch_e:
+                        logging.error(f"❌ 逐字稿批次 {batch_num} 添加失敗: {batch_e}")
+            
+            logging.info(f"✅ Notion 頁面建立成功 (ID: {page_id}, URL: {page_url})")
+            return page_id, page_url
+            
+        except requests.exceptions.RequestException as e:
+            logging.error(f"❌ Notion API 請求失敗: {e}", exc_info=True)
+            if e.response is not None:
+                try:
+                    err_details = e.response.json()
+                    logging.error(f"   錯誤碼: {e.response.status_code}, 訊息: {json.dumps(err_details, indent=2, ensure_ascii=False)}")
+                except json.JSONDecodeError:
+                    logging.error(f"   響應內容 (非 JSON): {e.response.text}")
+            raise
+        except Exception as e:
+            logging.error(f"❌ Notion 頁面建立時發生未知錯誤: {e}", exc_info=True)
+            raise
+
+    def _split_transcript_into_blocks(self, transcript: str, max_length: int = 2000) -> List[str]:
+        """將逐字稿分成適合 Notion API 的較小區塊"""
+        paragraphs = []
+        current_paragraph = ""
+        
+        lines = transcript.split("\n")
+        for line in lines:
+            if len(current_paragraph) + len(line) + 1 > max_length:
+                paragraphs.append(current_paragraph.strip())
+                current_paragraph = line
+            else:
+                if current_paragraph:
+                    current_paragraph += "\n" + line
+                else:
+                    current_paragraph = line
+        
+        if current_paragraph:
+            paragraphs.append(current_paragraph.strip())
+        
+        return paragraphs
+
+    def load_models(self):
+        """載入所需的 AI 模型"""
+        logging.info("🔄 載入 AI 模型...")
+        
+        # 載入 Whisper 模型 (如果尚未載入)
+        if self.whisper_model is None:
+            try:
+                logging.info("- 載入 Whisper 模型 (medium)...")
+                self.whisper_model = whisper.load_model("medium")
+                logging.info("✅ Whisper 模型載入成功")
+            except Exception as e:
+                logging.error(f"❌ Whisper 模型載入失敗: {e}")
+                raise
+        
+        # 載入 Pyannote 模型 (如果尚未載入)
+        if self.diarization_pipeline is None:
+            # 增加重試機制
+            max_retries = 3
+            retry_count = 0
+            last_error = None
+            
+            while retry_count < max_retries:
+                try:
+                    logging.info(f"- 載入說話人分離模型... (嘗試 {retry_count + 1}/{max_retries})")
+                    # Make sure we have the HF_TOKEN
+                    hf_token = os.getenv("HF_TOKEN")
+                    if not hf_token:
+                        raise ValueError("Missing HF_TOKEN environment variable")
+                    
+                    # Using a specific version instead of latest
+                    self.diarization_pipeline = Pipeline.from_pretrained(
+                        "pyannote/speaker-diarization-3.1",  # Use specific version
+                        use_auth_token=hf_token
+                    )
+                    logging.info("✅ 說話人分離模型載入成功")
+                    break
+                except Exception as e:
+                    last_error = e
+                    logging.error(f"❌ 說話人分離模型載入失敗: {e}")
+                    retry_count += 1
+                    time.sleep(2)  # 重試前等待2秒
+            
+            if self.diarization_pipeline is None:
+                logging.error(f"❌ 說話人分離模型在 {max_retries} 次嘗試後仍然載入失敗")
+                raise last_error or RuntimeError("Failed to load diarization pipeline")
+    
+    def convert_to_wav(self, input_path: str) -> str:
+        """轉換檔案為 WAV 格式 (16kHz 單聲道)"""
+        logging.info(f"🔄 轉換檔案格式為 WAV: {os.path.basename(input_path)}")
+        
+        # 目標路徑 (與原始檔案相同目錄，但副檔名改為 .wav)
+        output_dir = os.path.dirname(input_path)
+        output_filename = f"{os.path.splitext(os.path.basename(input_path))[0]}.wav"
+        output_path = os.path.join(output_dir, output_filename)
+        
+        # 使用 FFmpeg 轉換
+        try:
+            cmd = [
+                "ffmpeg", 
+                "-y",                # 覆蓋現有檔案
+                "-i", input_path,    # 輸入檔案
+                "-ar", "16000",      # 採樣率 16kHz
+                "-ac", "1",          # 單聲道
+                "-c:a", "pcm_s16le", # 16-bit PCM
+                output_path          # 輸出檔案
+            ]
+            
+            # 執行命令
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            logging.info(f"✅ 檔案轉換完成: {output_filename}")
+            
+            return output_path
+            
         except subprocess.CalledProcessError as e:
-            logging.error(f"❌ 轉換失敗: {str(e)}")
-            logging.error(f"FFmpeg stderr: {e.stderr.decode('utf-8', errors='replace')}")
-            os.remove(temp_wav.name)
-            raise RuntimeError("音檔轉換失敗")
+            logging.error(f"❌ 檔案轉換失敗: {e}")
+            raise
+    
+    def identify_speakers(self, segments: List[Dict[str, Any]], original_speakers: List[str]) -> Dict[str, str]:
+        """使用 Gemini 辨識說話人的真實身份"""
+        logging.info(f"🔄 識別說話人身份...")
+        
+        if not segments:
+            logging.warning("⚠️ 沒有語音段落，無法識別說話人")
+            return {}
+        
+        # 準備範例對話
+        sample_dialogue = ""
+        for i, segment in enumerate(segments[:20]):  # 最多使用前 20 個段落
+            speaker = segment["speaker"]
+            text = segment["text"]
+            sample_dialogue += f"{speaker}: {text}\n"
+        
+        # 提示 Gemini 識別說話人
+        try:
+            system_prompt = """
+            你是一位文字處理專家，專門根據對話內容辨識真實說話人。
+            請分析以下對話內容，辨識出各個說話人代碼（如 SPEAKER_00）對應的最可能真實姓名或職稱。
+            不確定的說話人請保留原代碼。回應格式必須是一個JSON，key為原始說話人代碼，value為你辨識的真實姓名/職稱。
+            只需回傳JSON，不要有其他文字。
+            """
+            
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            response = model.generate_content(
+                [
+                    system_prompt,
+                    f"對話內容如下：\n{sample_dialogue}\n\n請辨識出各個說話人代碼（如 {', '.join(original_speakers)}）對應的最可能真實姓名或職稱。"
+                ]
+            )
+            
+            response_text = response.text
+            # 有時 Gemini 會在 JSON 前後加上額外文字，需要提取純 JSON 部分
+            json_match = re.search(r'({.*?})', response_text, re.DOTALL)
+            if json_match:
+                response_text = json_match.group(1)
+            
+            # 解析 JSON 回應
+            speaker_map = json.loads(response_text)
+            logging.info(f"✅ 說話人身份識別成功: {speaker_map}")
+            
+            return speaker_map
+            
+        except Exception as e:
+            logging.error(f"❌ 說話人身份識別失敗: {e}")
+            return {speaker: speaker for speaker in original_speakers}  # 失敗時返回原始代碼
+    
+    def generate_summary(self, transcript: str, attachment_text: Optional[str] = None) -> Dict[str, Any]:
+        """使用 Gemini 生成摘要、標題和待辦事項"""
+        logging.info("🔄 使用 Gemini 生成摘要...")
+        
+        try:
+            context = ""
+            if attachment_text:
+                context = f"以下是提供的背景資料：\n{attachment_text}\n\n"
+            
+            system_prompt = """
+            你是一位會議記錄專家，專長於分析會議內容並產生重點摘要。
+            請分析以下會議記錄，並提供:
+            1. 一個簡短且清晰的會議標題
+            2. 一段簡潔的會議摘要 (約200-300字)
+            3. 一個待辦事項清單 (列出會議中提到的需要執行的項目)
+
+            回應格式須為 JSON，包含以下欄位：
+            - title: 會議標題
+            - summary: 會議摘要
+            - todos: 待辦事項清單 (陣列)
+
+            只需回傳 JSON，不要有其他文字。
+            """
+            
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            response = model.generate_content(
+                [
+                    system_prompt,
+                    f"{context}以下是會議記錄：\n{transcript}"
+                ]
+            )
+            
+            response_text = response.text
+            # 提取 JSON 部分
+            json_match = re.search(r'({.*?})', response_text, re.DOTALL)
+            if json_match:
+                response_text = json_match.group(1)
+            
+            # 解析 JSON 回應
+            summary_data = json.loads(response_text)
+            logging.info(f"✅ 摘要生成成功：{summary_data['title']}")
+            
+            return summary_data
+            
+        except Exception as e:
+            logging.error(f"❌ 摘要生成失敗: {e}")
+            # 返回預設值
+            return {
+                "title": "會議記錄",
+                "summary": "摘要生成失敗。" + str(e),
+                "todos": ["檢查摘要生成服務"]
+            }
 
     def process_audio(self, audio_path: str) -> Tuple[str, List[Dict[str, Any]], List[str]]:
-        """處理音檔：轉文字並進行說話人分離"""
+        """處理音檔：預處理、轉文字並進行說話人分離"""
         logging.info(f"🔄 處理音檔: {os.path.basename(audio_path)}")
         
         # 確保模型已載入
@@ -183,9 +797,16 @@ class AudioProcessor:
         # 如果檔案非 WAV 格式，先轉換
         if not audio_path.lower().endswith('.wav'):
             wav_path = self.convert_to_wav(audio_path)
-            # 可選：移除原始檔案以節省空間
+            # 移除原始檔案以節省空間
             os.remove(audio_path)
             audio_path = wav_path
+        
+        # 音頻預處理 (移除靜音)
+        preprocessed_path = self.preprocess_audio(audio_path)
+        if preprocessed_path != audio_path and os.path.exists(audio_path):
+            # 如果產生了新的處理檔案，可以選擇刪除原始檔案
+            os.remove(audio_path)
+            audio_path = preprocessed_path
             
         # 使用 Whisper 進行語音轉文字
         logging.info("- 執行語音轉文字...")
@@ -242,448 +863,136 @@ class AudioProcessor:
         logging.info(f"✅ 音檔處理完成，共 {len(segments)} 個段落")
         return transcript_full, segments, list(original_speakers)
 
-    def identify_speakers(self, segments: List[Dict[str, Any]], original_speakers: List[str]) -> Dict[str, str]:
-        """使用 Gemini 嘗試識別說話人名稱"""
-        logging.info("🔄 嘗試識別說話人...")
-        
-        if not original_speakers or "未知" in original_speakers:
-            logging.info("- 無法識別 '未知' 說話人，跳過識別。")
-            return {spk: spk for spk in original_speakers}
-        
-        # 組合對話內容給 LLM
-        conversation = ""
-        for seg in segments:
-            conversation += f"[{seg['speaker']}] {seg['text']}\n"
-        
-        prompt = f"""
-        以下是一段對話記錄，其中說話人被標記為 {', '.join(original_speakers)}。
-        請分析對話內容，判斷每個標籤（例如 SPEAKER_00, SPEAKER_01）實際代表的人名是誰。
-        人名可能在對話中被直接提及。
-
-        對話記錄：
-        {conversation}
-
-        請根據你的分析，提供一個 JSON 格式的映射，將原始標籤映射到識別出的人名。
-        如果無法從對話中確定某個標籤的人名，請保留原始標籤。
-        範例：{{ "SPEAKER_00": "徐教授", "SPEAKER_01": "SPEAKER_01" }}
-
-        請只回覆 JSON 格式的映射，不要有其他文字或解釋。
-        """
-        
-        try:
-            # Use the latest flash model identifier
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            response = model.generate_content(prompt)
-            
-            # 清理並解析 JSON 回應
-            cleaned_text = response.text.strip().lstrip('```json').rstrip('```').strip()
-            speaker_map = json.loads(cleaned_text)
-            
-            # 驗證格式是否正確
-            if not isinstance(speaker_map, dict):
-                raise ValueError("LLM 回應不是有效的 JSON 對象")
-            for key in original_speakers:
-                if key not in speaker_map:
-                    logging.warning(f"⚠️ LLM 回應缺少標籤 '{key}'，將使用原始標籤。")
-                    speaker_map[key] = key
-                elif not isinstance(speaker_map[key], str):
-                    logging.warning(f"⚠️ LLM 回應中標籤 '{key}' 的值不是字串，將使用原始標籤。")
-                    speaker_map[key] = key
-            
-            logging.info(f"✅ 說話人識別完成: {speaker_map}")
-            return speaker_map
-        except Exception as e:
-            logging.error(f"❌ 說話人識別失敗: {str(e)}")
-            # Log API feedback if available (check response existence)
-            if 'response' in locals() and hasattr(response, 'prompt_feedback'):
-                logging.error(f"   - Gemini Prompt Feedback: {response.prompt_feedback}")
-            if 'response' in locals() and response and response.candidates:
-                logging.error(f"   - Gemini Finish Reason: {response.candidates[0].finish_reason}")
-            return {spk: spk for spk in original_speakers}
-
-    def generate_summary(self, transcript: str, attachment_text: Optional[str] = None) -> Dict[str, str]:
-        """使用 Gemini 生成摘要和待辦事項，包含重試機制和更詳細的日誌記錄"""
-        logging.info("🔄 開始生成摘要與待辦事項...")
-
-        # Check if the transcript is empty or too short
-        if not transcript or len(transcript.strip()) < 10:
-            logging.warning("⚠️ 傳入的 transcript 為空或過短，無法生成摘要。")
-            return self.get_fallback_summary_data("Transcript is empty or too short")
-
-        # Log the first few characters of the transcript to verify content
-        logging.info(f"  - Transcript (start): {transcript[:200]}...")
-        if attachment_text:
-            logging.info(f"  - Attachment Text (start): {attachment_text[:200]}...")
-
-        # --- Prompt Definition ---
-        prompt_parts = [
-            "你是一位專業的會議記錄員。根據以下提供的語音記錄",
-        ]
-        if attachment_text:
-            prompt_parts.append("和附加文件內容")
-        prompt_parts.extend([
-            f"""
-            ，請執行以下任務：
-            1. 撰寫一段不超過300字的摘要。
-            2. 列出不超過5項的重要待辦事項 (To-Do)。
-            3. 給這個會議一個簡短但描述性強的標題。
-
-            語音記錄：
-            {transcript}
-            """
-        ])
-        if attachment_text:
-            prompt_parts.append(f"\n附加文件內容：\n{attachment_text}\n")
-        prompt_parts.append(
-            """
-            **重要指示：** 你的回覆 **必須** 僅包含一個有效的 JSON 物件，其結構如下所示。
-            **絕對不要** 在 JSON 物件前後包含任何其他文字、註解、說明或 markdown 標記 (例如 ```json ... ```)。
-
-            ```json
-            {{
-                "title": "會議標題",
-                "summary": "會議摘要...",
-                "todos": ["待辦事項1", "待辦事項2", ...]
-            }}
-            ```
-            """
-        )
-        full_prompt = "".join(prompt_parts)
-        # --- End Prompt Definition ---
-
-        max_retries = 3
-        retry_delay = 2  # seconds
-
-        for attempt in range(max_retries):
-            logging.info(f"  - 嘗試調用 Gemini API (第 {attempt + 1}/{max_retries} 次)...")
-            response = None  # Initialize response to None
-            try:
-                # Use the latest flash model identifier
-                model = genai.GenerativeModel('gemini-2.0-flash')
-                # model = genai.GenerativeModel('models/gemini-2.5-flash-preview-04-17')
-                response = model.generate_content(full_prompt)
-                raw_text = response.text
-
-                logging.info(f"  - Gemini Raw Response (Attempt {attempt+1}):\n{raw_text}")  # Log the FULL raw response
-
-                # --- JSON Parsing Logic ---
-                cleaned_text = raw_text.strip()
-                match = re.search(r"```json\s*(\{.*?\})\s*```", cleaned_text, re.DOTALL)
-                if match:
-                    json_text = match.group(1)
-                    logging.info("  - JSON extracted from markdown block.")
-                else:
-                    if cleaned_text.startswith('{') and cleaned_text.endswith('}'):
-                        json_text = cleaned_text
-                        logging.info("  - Raw response treated as JSON.")
-                    else:
-                        logging.error(f"  - 解析失敗：回應內容不是預期的 JSON 物件格式或 Markdown JSON 區塊。")
-                        raise ValueError("Response content was not a valid JSON object or markdown block.")
-
-                summary_data = json.loads(json_text)
-
-                if not all(k in summary_data for k in ["title", "summary", "todos"]):
-                    logging.error(f"  - 解析失敗：JSON 物件缺少必要的鍵 (title, summary, todos)。 Found keys: {list(summary_data.keys())}")
-                    raise ValueError("JSON object missing required keys (title, summary, todos)")
-                if not isinstance(summary_data["todos"], list):
-                    logging.error(f"  - 解析失敗：'todos' 鍵的值不是列表。 Type: {type(summary_data['todos'])}")
-                    raise ValueError("'todos' key value must be a list")
-                # --- End JSON Parsing Logic ---
-
-                logging.info("✅ 摘要生成成功")
-                return summary_data
-
-            except json.JSONDecodeError as json_err:
-                logging.error(f"❌ 第 {attempt + 1} 次 JSON 解析失敗: {str(json_err)}")
-                logging.error(f"   - Failed JSON Text: {json_text[:500]}...")  # Log the text that failed parsing
-
-            except Exception as e:
-                logging.error(f"❌ 第 {attempt + 1} 次摘要生成/處理時發生錯誤: {str(e)}")
-                # Check if response exists before accessing attributes
-                if response:
-                    if hasattr(response, 'prompt_feedback'):
-                        logging.error(f"   - Gemini Prompt Feedback: {response.prompt_feedback}")
-                    if response.candidates:
-                        logging.error(f"   - Gemini Finish Reason: {response.candidates[0].finish_reason}")
-                else:
-                    logging.error("   - Gemini API call likely failed before response was received.")
-
-            if attempt < max_retries - 1:
-                logging.info(f"   將在 {retry_delay} 秒後重試...")
-                time.sleep(retry_delay)
-            else:
-                logging.error("❌ 已達最大重試次數，摘要生成失敗。")
-
-        logging.warning("❌ 所有摘要生成嘗試失敗，返回預設內容。")
-        return self.get_fallback_summary_data("Max retries reached or permanent error")
-
-    def get_fallback_summary_data(self, reason: str = "Unknown error") -> Dict[str, str]:
-        """Returns the default summary data when generation fails."""
-        logging.warning(f"  - Using fallback summary data. Reason: {reason}")
-        return {
-            "title": "會議記錄 (摘要生成失敗)",
-            "summary": "無法生成摘要，請查看原始記錄。",
-            "todos": ["檢閱會議記錄並手動整理重點"]
-        }
-
-    def create_notion_page(self, title: str, summary: str, todos: List[str], segments: List[Dict[str, Any]], speaker_map: Dict[str, str]) -> Tuple[str, str]:
-        """建立 Notion 頁面，包含參與者和表格化的待辦事項"""
-        logging.info("🔄 建立 Notion 頁面...")
-
-        notion_token = os.getenv("NOTION_TOKEN")
-        database_id = os.getenv("NOTION_DATABASE_ID")
-
-        if not notion_token or not database_id:
-            raise ValueError("缺少 Notion API 設定")
-
-        # --- Prepare initial blocks (metadata, participants, summary, todos) ---
-        initial_blocks = []
-        current_date_str = datetime.now().strftime("%Y-%m-%d")
-
-        # --- Participants Section ---
-        participants = list(set(speaker_map.values()))  # Get unique identified names
-        if participants:
-            initial_blocks.append({
-                "object": "block",
-                "type": "heading_2",
-                "heading_2": {
-                    "rich_text": [{"type": "text", "text": {"content": "參與者"}}]
-                }
-            })
-            participant_text = ", ".join(participants)
-            initial_blocks.append({
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [{"type": "text", "text": {"content": participant_text}}]
-                }
-            })
-            initial_blocks.append({"object": "block", "type": "divider", "divider": {}})  # Divider
-
-        # --- Summary Section ---
-        initial_blocks.append({
-            "object": "block",
-            "type": "heading_2",
-            "heading_2": {
-                "rich_text": [{"type": "text", "text": {"content": "摘要"}}]
-            }
-        })
-        initial_blocks.append({
-            "object": "block",
-            "type": "paragraph",
-            "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": summary}}]
-            }
-        })
-        initial_blocks.append({"object": "block", "type": "divider", "divider": {}})  # Divider
-
-        # --- To-Do Section (as Table) ---
-        initial_blocks.append({
-            "object": "block",
-            "type": "heading_2",
-            "heading_2": {
-                "rich_text": [{"type": "text", "text": {"content": "待辦事項"}}]
-            }
-        })
-        if todos:
-            # Create a simple table structure
-            table_rows = []
-            for todo in todos:
-                table_rows.append({
-                    "type": "table_row",
-                    "cells": [[{"type": "text", "text": {"content": todo}}]]  # Each cell is a list of rich text objects
-                })
-
-            initial_blocks.append({
-                "object": "block",
-                "type": "table",
-                "table": {
-                    "table_width": 1,  # Number of columns
-                    "has_column_header": False,  # Set to True if you add a header row above
-                    "has_row_header": False,
-                    "children": table_rows
-                }
-            })
-        else:
-            initial_blocks.append({
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [{"type": "text", "text": {"content": "無待辦事項。"}}]
-                }
-            })
-        initial_blocks.append({"object": "block", "type": "divider", "divider": {}})  # Divider
-
-        # --- Full Transcript Section Header ---
-        initial_blocks.append({
-            "object": "block",
-            "type": "heading_2",
-            "heading_2": {
-                "rich_text": [{"type": "text", "text": {"content": "完整記錄"}}]
-            }
-        })
-        initial_blocks.append({
-            "object": "block",
-            "type": "paragraph",
-            "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": "以下是會議的完整轉錄內容："}}]
-            }
-        })
-
-        # --- Prepare transcript segment blocks for batch processing ---
-        transcript_blocks = []
-        for segment in segments:
-            speaker = segment["speaker"]
-            text = segment["text"]
-            content = f"[{speaker}]: {text}"
-            transcript_blocks.append({
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [{"type": "text", "text": {"content": content}}]
-                }
-            })
-
-        headers = {
-            "Authorization": f"Bearer {notion_token}",
-            "Content-Type": "application/json",
-            "Notion-Version": "2022-06-28"
-        }
-
-        page_title = f"{title} ({current_date_str})"
-
-        # Step 1: Create the initial page with basic information
-        data = {
-            "parent": {"database_id": database_id},
-            "properties": {
-                "title": {
-                    "title": [{"text": {"content": page_title}}]
-                }
-            },
-            "children": initial_blocks
-        }
-
-        try:
-            logging.info(f"- 建立基本 Notion 頁面 (標題、摘要等)")
-            response = requests.post(
-                "https://api.notion.com/v1/pages",
-                headers=headers,
-                json=data
-            )
-            response.raise_for_status()
-            result = response.json()
-            page_id = result["id"]
-            page_url = result.get("url", f"https://www.notion.so/{page_id.replace('-', '')}")
-            
-            # Step 2: Append transcript segments in batches of 100
-            if transcript_blocks:
-                batch_size = 100
-                total_batches = (len(transcript_blocks) + batch_size - 1) // batch_size  # Ceiling division
-                
-                logging.info(f"- 開始分批添加轉錄內容 (共 {len(transcript_blocks)} 段，分 {total_batches} 批)")
-                
-                for i in range(0, len(transcript_blocks), batch_size):
-                    batch_num = i // batch_size + 1
-                    end_idx = min(i + batch_size, len(transcript_blocks))
-                    current_batch = transcript_blocks[i:end_idx]
-                    
-                    logging.info(f"  - 添加第 {batch_num}/{total_batches} 批 ({len(current_batch)} 段)")
-                    
-                    try:
-                        append_response = requests.patch(
-                            f"https://api.notion.com/v1/blocks/{page_id}/children",
-                            headers=headers,
-                            json={"children": current_batch}
-                        )
-                        append_response.raise_for_status()
-                        
-                        # Add a small delay to avoid rate limiting
-                        if i + batch_size < len(transcript_blocks):
-                            time.sleep(0.5)
-                    except requests.exceptions.RequestException as batch_e:
-                        logging.error(f"❌ 批次 {batch_num} 添加失敗: {str(batch_e)}")
-                        if batch_e.response is not None:
-                            try:
-                                err_details = batch_e.response.json()
-                                logging.error(f"   錯誤碼: {batch_e.response.status_code}, 訊息: {json.dumps(err_details, indent=2, ensure_ascii=False)}")
-                            except json.JSONDecodeError:
-                                logging.error(f"   響應內容 (非 JSON): {batch_e.response.text}")
-                        # Continue with next batch even if one fails
-            
-            logging.info(f"✅ Notion 頁面建立成功 (ID: {page_id}, URL: {page_url})")
-            return page_id, page_url
-            
-        except requests.exceptions.RequestException as e:
-            logging.error(f"❌ Notion API 請求失敗: {str(e)}", exc_info=True)
-            if e.response is not None:
-                try:
-                    err_details = e.response.json()
-                    logging.error(f"   錯誤碼: {e.response.status_code}, 訊息: {json.dumps(err_details, indent=2, ensure_ascii=False)}")
-                except json.JSONDecodeError:
-                    logging.error(f"   響應內容 (非 JSON): {e.response.text}")
-            raise
-        except Exception as e:
-            logging.error(f"❌ Notion 頁面建立時發生未知錯誤: {str(e)}", exc_info=True)
-            raise
-
-    def process_file(self, file_id: str, attachment_file_id: Optional[str] = None) -> Dict[str, Any]:
-        """處理完整流程，包含附件和說話人識別"""
+    def _process_file_job(self, job_id: str, file_id: str, attachment_file_id: Optional[str] = None):
+        """後台處理音頻檔案的工作函數 (在線程中執行)"""
         audio_temp_dir = None
         attachment_temp_dir = None
         attachment_text = None
         summary_data = None
         speaker_map = {}
 
+        # 更新工作狀態為處理中
+        with self.jobs_lock:
+            self.jobs[job_id]['status'] = JOB_STATUS['PROCESSING']
+            self.jobs[job_id]['progress'] = 5
+            self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+
         try:
-            logging.info(f"Processing file_id: {file_id}, attachment_file_id: {attachment_file_id}")
+            logging.info(f"[Job {job_id}] 開始處理 file_id: {file_id}")
+            
+            # 更新進度: 10%
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 10
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            
+            # 處理附件 (如果有)
             if attachment_file_id:
                 attachment_text, attachment_temp_dir = self.download_and_extract_text(attachment_file_id)
-
+            
+            # 更新進度: 20%
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 20
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            
+            # 下載音頻檔案
             audio_path, audio_temp_dir = self.download_from_drive(file_id)
-
+            
+            # 更新進度: 30%
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 30
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            
+            # 處理音頻: 轉錄和說話人分離
             _, segments, original_speakers = self.process_audio(audio_path)
-
+            
+            # 更新進度: 60%
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 60
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                
+            # 識別說話人
             speaker_map = self.identify_speakers(segments, original_speakers)
-
+            
+            # 更新進度: 70%
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 70
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            
+            # 準備輸出
             updated_segments = []
             transcript_for_summary = ""
             if not segments:
-                logging.warning("⚠️ No segments found after audio processing. Transcript will be empty.")
+                logging.warning(f"[Job {job_id}] ⚠️ No segments found after audio processing. Transcript will be empty.")
             for seg in segments:
                 identified_speaker = speaker_map.get(seg['speaker'], seg['speaker'])
                 updated_segments.append({**seg, "speaker": identified_speaker})
                 transcript_for_summary += f"[{identified_speaker}]: {seg['text']}\n"
-
+            
+            # 更新進度: 75%
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 75
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            
+            # 生成摘要
             summary_data = self.generate_summary(transcript_for_summary, attachment_text)
             title = summary_data["title"]
             summary = summary_data["summary"]
             todos = summary_data["todos"]
-
+            
+            # 更新進度: 85%
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 85
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            
+            # 建立 Notion 頁面
             page_id, page_url = self.create_notion_page(
-                title, summary, todos, updated_segments, speaker_map
+                title, summary, todos, updated_segments, speaker_map, file_id
             )
-
-            logging.info(f"✅ File processing successful for file_id: {file_id}")
-            return {
+            
+            # 更新進度: 95%
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 95
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            
+            # 重命名 Google Drive 檔案 (可選)
+            # 格式: [摘要日期] 檔案標題
+            new_filename = f"[{datetime.now().strftime('%Y-%m-%d')}] {title}"
+            self.rename_drive_file(file_id, new_filename)
+            
+            # 更新工作狀態為完成
+            result = {
                 "success": True,
                 "notion_page_id": page_id,
                 "notion_page_url": page_url,
                 "title": title,
                 "summary": summary,
                 "todos": todos,
-                "identified_speakers": speaker_map
+                "identified_speakers": speaker_map,
+                "drive_filename": new_filename
             }
+            
+            with self.jobs_lock:
+                self.jobs[job_id]['status'] = JOB_STATUS['COMPLETED']
+                self.jobs[job_id]['progress'] = 100
+                self.jobs[job_id]['result'] = result
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            
+            logging.info(f"[Job {job_id}] ✅ 處理完成")
+            return result
 
         except Exception as e:
-            logging.error(f"處理檔案時發生未預期錯誤 (file_id: {file_id}): {str(e)}", exc_info=True)
+            logging.error(f"[Job {job_id}] ❌ 處理失敗: {e}", exc_info=True)
+            
+            # 準備錯誤結果
             final_title = summary_data["title"] if summary_data else "處理失敗"
-            final_summary = summary_data["summary"] if summary_data else f"處理過程中發生錯誤: {str(e)}"
+            final_summary = summary_data["summary"] if summary_data else f"處理過程中發生錯誤: {e}"
             final_todos = summary_data["todos"] if summary_data else ["檢查處理日誌"]
             final_speakers = speaker_map if speaker_map else None
-
-            return {
+            
+            # 更新工作狀態為失敗
+            error_result = {
                 "success": False,
-                "error": f"處理失敗: {str(e)}",
+                "error": f"處理失敗: {e}",
                 "notion_page_id": None,
                 "notion_page_url": None,
                 "title": final_title,
@@ -691,25 +1000,103 @@ class AudioProcessor:
                 "todos": final_todos,
                 "identified_speakers": final_speakers
             }
+            
+            with self.jobs_lock:
+                self.jobs[job_id]['status'] = JOB_STATUS['FAILED']
+                self.jobs[job_id]['progress'] = 100
+                self.jobs[job_id]['result'] = error_result
+                self.jobs[job_id]['error'] = str(e)
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            
+            return error_result
 
         finally:
+            # 清理臨時檔案
             if audio_temp_dir and os.path.exists(audio_temp_dir):
-                logging.info(f"🧹 清理音檔臨時目錄: {audio_temp_dir}")
+                logging.info(f"[Job {job_id}] 🧹 清理音檔臨時目錄")
                 shutil.rmtree(audio_temp_dir)
             if attachment_temp_dir and os.path.exists(attachment_temp_dir):
-                logging.info(f"🧹 清理附件臨時目錄: {attachment_temp_dir}")
+                logging.info(f"[Job {job_id}] 🧹 清理附件臨時目錄")
                 shutil.rmtree(attachment_temp_dir)
 
-processor = AudioProcessor()
+    def process_file_async(self, file_id: str, attachment_file_id: Optional[str] = None) -> str:
+        """非同步處理檔案，返回工作 ID"""
+        # 生成唯一工作 ID
+        job_id = str(uuid.uuid4())
+        
+        # 初始化工作狀態
+        with self.jobs_lock:
+            self.jobs[job_id] = {
+                'id': job_id,
+                'file_id': file_id,
+                'attachment_file_id': attachment_file_id,
+                'status': JOB_STATUS['PENDING'],
+                'progress': 0,
+                'created_at': datetime.now().isoformat(),
+                'updated_at': datetime.now().isoformat(),
+                'result': None,
+                'error': None
+            }
+        
+        # 提交工作到線程池
+        self.executor.submit(
+            self._process_file_job, job_id, file_id, attachment_file_id
+        )
+        
+        return job_id
+    
+    def get_job_status(self, job_id: str) -> Dict[str, Any]:
+        """獲取工作狀態"""
+        with self.jobs_lock:
+            job = self.jobs.get(job_id)
+            
+        if not job:
+            return {'error': '工作不存在'}
+        
+        # 根據工作狀態返回不同信息
+        if job['status'] == JOB_STATUS['COMPLETED']:
+            return {
+                'id': job['id'],
+                'status': job['status'],
+                'progress': job['progress'],
+                'created_at': job['created_at'],
+                'updated_at': job['updated_at'],
+                'result': job['result']
+            }
+        elif job['status'] == JOB_STATUS['FAILED']:
+            return {
+                'id': job['id'],
+                'status': job['status'],
+                'progress': job['progress'],
+                'created_at': job['created_at'],
+                'updated_at': job['updated_at'],
+                'error': job['error']
+            }
+        else:
+            # 處理中或等待中
+            return {
+                'id': job['id'],
+                'status': job['status'],
+                'progress': job['progress'],
+                'created_at': job['created_at'],
+                'updated_at': job['updated_at']
+            }
+
+# 初始化處理器
+processor = AudioProcessor(max_workers=3)
 
 @app.route('/health', methods=['GET'])
 def health_check():
     """健康檢查端點"""
-    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
+    return jsonify({
+        "status": "healthy", 
+        "timestamp": datetime.now().isoformat(),
+        "active_jobs": len([j for j in processor.jobs.values() if j['status'] in [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']]])
+    })
 
 @app.route('/process', methods=['POST'])
 def process_audio_endpoint():
-    """處理音檔的 API 端點，可選附件"""
+    """非同步處理音檔的 API 端點，立即返回工作 ID"""
     try:
         data = request.json
 
@@ -722,21 +1109,67 @@ def process_audio_endpoint():
         if not file_id:
             return jsonify({"success": False, "error": "缺少 file_id 參數"}), 400
 
-        result = processor.process_file(file_id, attachment_file_id)
-
-        if result.get("success"):
-            return jsonify(result)
-        else:
-            logging.error(f"處理失敗，錯誤: {result.get('error', '未知錯誤')}")
-            return jsonify({"success": False, "error": result.get('error', '處理過程中發生錯誤')}), 500
+        # 創建非同步工作
+        job_id = processor.process_file_async(file_id, attachment_file_id)
+        
+        # 立即返回工作ID
+        return jsonify({
+            "success": True,
+            "message": "工作已提交，正在後台處理",
+            "job_id": job_id
+        })
 
     except Exception as e:
-        logging.error(f"API 錯誤: {str(e)}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {str(e)}"}), 500
+        logging.error(f"API 錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+
+@app.route('/job/<job_id>', methods=['GET'])
+def get_job_status_endpoint(job_id):
+    """獲取工作狀態的 API 端點"""
+    try:
+        job_status = processor.get_job_status(job_id)
+        
+        if 'error' in job_status:
+            return jsonify({"success": False, "error": job_status['error']}), 404
+            
+        return jsonify({
+            "success": True,
+            "job": job_status
+        })
+        
+    except Exception as e:
+        logging.error(f"API 錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+
+@app.route('/jobs', methods=['GET'])
+def get_active_jobs_endpoint():
+    """獲取活躍工作列表的 API 端點"""
+    try:
+        with processor.jobs_lock:
+            active_jobs = {
+                job_id: {
+                    'id': job['id'],
+                    'status': job['status'],
+                    'progress': job['progress'],
+                    'created_at': job['created_at'],
+                    'updated_at': job['updated_at']
+                }
+                for job_id, job in processor.jobs.items()
+                if job['status'] in [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']]
+            }
+            
+        return jsonify({
+            "success": True,
+            "active_jobs": active_jobs
+        })
+        
+    except Exception as e:
+        logging.error(f"API 錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     
     logging.info(f"🚀 啟動伺服器於 port {port}...")
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    app.run(host='0.0.0.0', port=port, debug=debug, threaded=True)

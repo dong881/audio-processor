@@ -12,6 +12,12 @@ This Flask application processes audio files from Google Drive, performs speech-
 *   Generates a meeting title, summary, and to-do list using Google Gemini (`gemini-1.5-flash-latest`).
 *   Optionally extracts text from a PDF attachment (via Google Drive) to provide more context to Gemini for summarization.
 *   Creates a structured page in a specified Notion database with the title, summary, to-dos, and full transcript (without timestamps, using identified speaker names).
+*   **NEW**: Multi-threaded processing with job queue for handling multiple requests simultaneously.
+*   **NEW**: Audio preprocessing to remove silence and improve processing efficiency.
+*   **NEW**: Automatic file renaming on Google Drive based on generated titles.
+*   **NEW**: Timestamped transcript entries in Notion output.
+*   **NEW**: Google Drive links included in the Notion page.
+*   **NEW**: Job status tracking and progress monitoring APIs.
 
 ## Detailed Workflow
 
@@ -23,6 +29,7 @@ For a detailed step-by-step explanation of the application's internal workflow a
 *   Docker & Docker Compose (Version 1.x might require multi-step updates, see below)
 *   Google Cloud Project with Drive API enabled
     *   OAuth 2.0 Credentials (`credentials.json`) OR Service Account Key (`service_account.json`)
+    *   Drive API requires both read and write permissions
 *   Google Gemini API Key
 *   Hugging Face Hub Token (for Pyannote)
 *   Notion Integration Token and Database ID
@@ -72,7 +79,9 @@ For a detailed step-by-step explanation of the application's internal workflow a
 
 ## API Usage
 
-Send a POST request to the `/process` endpoint.
+### Submit Processing Job
+
+Send a POST request to the `/process` endpoint to start asynchronous processing.
 
 **Endpoint:** `POST /process`
 
@@ -103,26 +112,106 @@ curl -X POST http://localhost:5000/process \
 ```json
 {
   "success": true,
-  "notion_page_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-  "notion_page_url": "https://www.notion.so/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-  "title": "Generated Meeting Title",
-  "summary": "Generated meeting summary...",
-  "todos": [
-    "Generated Todo 1",
-    "Generated Todo 2"
-  ],
-  "identified_speakers": {
-      "SPEAKER_00": "Alice",
-      "SPEAKER_01": "Bob"
+  "message": "工作已提交，正在後台處理",
+  "job_id": "12345678-1234-5678-1234-567812345678"
+}
+```
+
+### Check Job Status
+
+Send a GET request to the `/job/<job_id>` endpoint to check processing status.
+
+**Endpoint:** `GET /job/<job_id>`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/job/12345678-1234-5678-1234-567812345678
+```
+
+**Success Response (Job in Progress):**
+```json
+{
+  "success": true,
+  "job": {
+    "id": "12345678-1234-5678-1234-567812345678",
+    "status": "processing",
+    "progress": 65,
+    "created_at": "2023-06-10T12:34:56.789012",
+    "updated_at": "2023-06-10T12:35:23.456789"
   }
 }
 ```
 
-**Error Response (4xx or 5xx):**
+**Success Response (Job Completed):**
 ```json
 {
-  "success": false,
-  "error": "Error message describing the issue"
+  "success": true,
+  "job": {
+    "id": "12345678-1234-5678-1234-567812345678",
+    "status": "completed",
+    "progress": 100,
+    "created_at": "2023-06-10T12:34:56.789012",
+    "updated_at": "2023-06-10T12:38:45.123456",
+    "result": {
+      "success": true,
+      "notion_page_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      "notion_page_url": "https://www.notion.so/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "title": "Generated Meeting Title",
+      "summary": "Generated meeting summary...",
+      "todos": ["Generated Todo 1", "Generated Todo 2"],
+      "identified_speakers": {"SPEAKER_00": "Alice", "SPEAKER_01": "Bob"},
+      "drive_filename": "[2023-06-10] Generated Meeting Title"
+    }
+  }
+}
+```
+
+### List Active Jobs
+
+Send a GET request to the `/jobs` endpoint to get a list of all active jobs.
+
+**Endpoint:** `GET /jobs`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/jobs
+```
+
+**Success Response:**
+```json
+{
+  "success": true,
+  "active_jobs": {
+    "12345678-1234-5678-1234-567812345678": {
+      "id": "12345678-1234-5678-1234-567812345678",
+      "status": "processing",
+      "progress": 65,
+      "created_at": "2023-06-10T12:34:56.789012",
+      "updated_at": "2023-06-10T12:35:23.456789"
+    },
+    "87654321-4321-5678-4321-876543210987": {
+      "id": "87654321-4321-5678-4321-876543210987",
+      "status": "pending",
+      "progress": 0,
+      "created_at": "2023-06-10T12:38:00.123456",
+      "updated_at": "2023-06-10T12:38:00.123456"
+    }
+  }
+}
+```
+
+### Health Check
+
+A health check endpoint is available that also shows the number of active jobs:
+
+**Endpoint:** `GET /health`
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2023-06-10T12:38:00.123456",
+  "active_jobs": 2
 }
 ```
 
@@ -151,19 +240,16 @@ If you modify the Python code (`app.py` or other dependencies), you need to rebu
 
 This ensures the old container is fully removed before the new one is created from the updated image.
 
-## Health Check
+## Additional Dependencies
 
-A simple health check endpoint is available:
-
-**Endpoint:** `GET /health`
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "timestamp": "YYYY-MM-DDTHH:MM:SS.ffffff"
-}
+The enhanced version requires these additional Python packages:
 ```
+numpy
+librosa
+soundfile
+```
+
+You may need to add these to your Dockerfile or requirements.txt file if they're not already included.
 
 ## Cleaning Up Unused Docker Images
 
