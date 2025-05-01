@@ -221,7 +221,8 @@ This function:
 3. Creates a new paragraph when max_length would be exceeded
 4. Returns an array of paragraphs that can be safely added to Notion
 
-This function is used by create_notion_page to handle Notion API limitations.
+The function is necessary because Notion API has a limit on block content length. By breaking 
+the transcript into smaller chunks, we can avoid API errors when creating pages with long transcripts.
 
 ### Example
 

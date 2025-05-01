@@ -34,6 +34,9 @@ import librosa
 # LLM API 相關
 import google.generativeai as genai
 
+# 添加導入 NotionFormatter
+from notion_formatter import NotionFormatter
+
 # PDF 處理 (需要 pip install PyPDF2)
 try:
     import PyPDF2
@@ -69,6 +72,8 @@ class AudioProcessor:
         self.jobs = {}
         # 確保線程安全的鎖
         self.jobs_lock = threading.Lock()
+        # 初始化 Notion 格式化工具
+        self.notion_formatter = NotionFormatter()
         # 初始化服務
         self.init_services()
 
@@ -110,8 +115,11 @@ class AudioProcessor:
                 fileId=file_id, fields="name,mimeType"
             ).execute()
             
-            file_name = file_meta.get('name', f"file_{file_id}")
-            local_path = os.path.join(temp_dir, file_name)
+            # 獲取檔案名稱並清理不安全的字元
+            raw_file_name = file_meta.get('name', f"file_{file_id}")
+            # 移除斜線等不安全字元，避免路徑問題
+            safe_file_name = re.sub(r'[\\/*?:"<>|]', "_", raw_file_name)
+            local_path = os.path.join(temp_dir, safe_file_name)
             
             # 下載檔案
             request = self.drive_service.files().get_media(fileId=file_id)
@@ -123,7 +131,7 @@ class AudioProcessor:
                     status, done = downloader.next_chunk()
                     logging.debug(f"下載進度: {int(status.progress() * 100)}%")
             
-            logging.info(f"✅ 檔案下載完成: {file_name} (儲存於 {temp_dir})")
+            logging.info(f"✅ 檔案下載完成: {safe_file_name} (儲存於 {temp_dir})")
             return local_path, temp_dir
             
         except Exception as e:
@@ -295,15 +303,9 @@ class AudioProcessor:
         
         try:
             # 使用更詳細的Markdown格式指示
-            system_prompt = """幫我將錄音逐字稿整理成筆記內容，請使用以下Markdown格式:
-
-            1. 使用 ## 作為主要標題，### 作為子標題
-            2. 使用 - 建立清單項目
-            3. 特別重要的決策或行動項目，請用以下格式標註:
-               :::決策：這是一個重要決策:::
-               :::行動項目：這是需要執行的事項:::
-            
-            請確保內容結構清晰，包含會議重點、討論要點與決策。"""
+            system_prompt = """將錄音逐字稿整理成筆記內容，請使用Markdown格式直接輸出筆記內容:
+            避免使用```markdown```，直接輸出Markdown格式的筆記內容。
+            """
             
             # 使用新的模型
             model = genai.GenerativeModel('gemini-2.5-pro-exp-03-25')
@@ -321,100 +323,6 @@ class AudioProcessor:
         except Exception as e:
             logging.error(f"❌ 筆記生成失敗: {str(e)}")
             return "筆記生成失敗，請參考會議摘要和完整記錄。"
-
-    def _process_note_format_for_notion(self, text: str) -> list:
-        """將Markdown文本處理成適合 Notion API 的格式"""
-        blocks = []
-        lines = text.split('\n')
-        
-        i = 0
-        in_callout = False
-        callout_content = ""
-        
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            # 跳過空行
-            if not line:
-                i += 1
-                continue
-                
-            # 檢測callout結束
-            if in_callout and line == ':::':
-                blocks.append({
-                    "object": "block",
-                    "type": "callout",
-                    "callout": {
-                        "rich_text": [{"type": "text", "text": {"content": callout_content.strip()}}],
-                        "icon": {"emoji": "✅"}
-                    }
-                })
-                in_callout = False
-                callout_content = ""
-                i += 1
-                continue
-                
-            # 收集callout內容
-            if in_callout:
-                callout_content += line + "\n"
-                i += 1
-                continue
-                
-            # 檢測callout開始
-            if line.startswith(':::'):
-                in_callout = True
-                callout_content = line[3:] + "\n"  # 移除開頭的 :::
-                i += 1
-                continue
-                
-            # 檢查Markdown標題 (## 或 ###)
-            if line.startswith('##'):
-                heading_level = 3 if line.startswith('###') else 2
-                heading_text = line.lstrip('#').strip()
-                
-                blocks.append({
-                    "object": "block",
-                    "type": f"heading_{heading_level}",
-                    f"heading_{heading_level}": {
-                        "rich_text": [{"type": "text", "text": {"content": heading_text}}]
-                    }
-                })
-            
-            # 檢查列點 (以 -, *, + 開頭)
-            elif line.startswith('-') or line.startswith('*') or line.startswith('+'):
-                content = line[1:].strip()
-                blocks.append({
-                    "object": "block",
-                    "type": "bulleted_list_item",
-                    "bulleted_list_item": {
-                        "rich_text": [{"type": "text", "text": {"content": content}}]
-                    }
-                })
-            
-            # 普通段落
-            else:
-                blocks.append({
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [{"type": "text", "text": {"content": line}}]
-                    }
-                })
-                
-            i += 1
-            
-        # 處理未關閉的callout
-        if in_callout and callout_content:
-            blocks.append({
-                "object": "block",
-                "type": "callout",
-                "callout": {
-                    "rich_text": [{"type": "text", "text": {"content": callout_content.strip()}}],
-                    "icon": {"emoji": "✅"}
-                }
-            })
-            
-        return blocks
 
     def create_notion_page(self, title: str, summary: str, todos: List[str], segments: List[Dict[str, Any]], speaker_map: Dict[str, str], file_id: str = None) -> Tuple[str, str]:
         """建立單一 Notion 頁面，包含標題、日期、參與者、摘要、待辦事項、完整筆記與內嵌的逐字稿"""
@@ -558,16 +466,12 @@ class AudioProcessor:
 
         # --- 處理完整逐字稿 (無時間戳記) ---
         full_transcript = ""
-        clean_transcript = ""
         
         for segment in segments:
             speaker = segment["speaker"]
             text = segment["text"]
             content = f"{speaker}: {text}"
             full_transcript += f"{content}\n"
-            
-            # 清理版本 (僅顯示講者和內容，無時間戳記)
-            clean_transcript += f"{speaker}: {text}\n\n"
 
         # --- 生成完整筆記 ---
         comprehensive_notes = self.generate_comprehensive_notes(full_transcript)
@@ -581,41 +485,23 @@ class AudioProcessor:
             }
         })
         
-        # 使用新的格式處理函數
-        note_blocks = self._process_note_format_for_notion(comprehensive_notes)
-        blocks.extend(note_blocks)
+        # Notion API 限制：每次請求最多 100 個區塊
+        MAX_BLOCKS_PER_REQUEST = 90  # 使用 90 作為安全界限
         
-        blocks.append({"object": "block", "type": "divider", "divider": {}})
-
-        # --- 內嵌完整逐字稿區塊 (使用 toggle 區塊) ---
-        blocks.append({
-            "object": "block",
-            "type": "heading_2",
-            "heading_2": {
-                "rich_text": [{"type": "text", "text": {"content": "🎙️ 完整逐字稿"}}]
-            }
-        })
+        # 使用新的 NotionFormatter 來處理筆記
+        note_blocks = self.notion_formatter.process_note_format_for_notion(comprehensive_notes)
         
-        # 將逐字稿分成多個段落 (因為 Notion API 有字符限制)
-        clean_paragraphs = self._split_transcript_into_blocks(clean_transcript)
+        # 計算已有區塊數 + 逐字稿標題區塊(1) + toggle區塊(1)
+        base_blocks_count = len(blocks) + 2
+        available_slots = MAX_BLOCKS_PER_REQUEST - base_blocks_count
         
-        # 使用 toggle 收納逐字稿
-        blocks.append({
-            "object": "block",
-            "type": "toggle",
-            "toggle": {
-                "rich_text": [{"type": "text", "text": {"content": "點擊展開完整逐字稿"}}],
-                "children": [
-                    {
-                        "object": "block",
-                        "type": "paragraph",
-                        "paragraph": {
-                            "rich_text": [{"type": "text", "text": {"content": "此區塊包含完整逐字稿內容"}}]
-                        }
-                    }
-                ]
-            }
-        })
+        # 如果筆記區塊太多，僅添加能容納的部分
+        if len(note_blocks) > available_slots:
+            blocks.extend(note_blocks[:available_slots])
+            remaining_note_blocks = note_blocks[available_slots:]
+        else:
+            blocks.extend(note_blocks)
+            remaining_note_blocks = []
         
         headers = {
             "Authorization": f"Bearer {notion_token}",
@@ -635,7 +521,7 @@ class AudioProcessor:
                 "children": blocks
             }
             
-            logging.info(f"- 建立 Notion 頁面")
+            logging.info(f"- 建立 Notion 頁面 (包含 {len(blocks)} 個區塊，限制為 100)")
             response = requests.post(
                 "https://api.notion.com/v1/pages",
                 headers=headers,
@@ -646,63 +532,89 @@ class AudioProcessor:
             page_id = result["id"]
             page_url = result.get("url", f"https://www.notion.so/{page_id.replace('-', '')}")
             
-            # 分批添加逐字稿內容到 toggle 區塊
-            toggle_block_id = None
-            for block in result.get("children", []):
-                if block.get("type") == "toggle":
-                    toggle_block_id = block["id"]
-                    break
-                    
-            # 如果找不到 toggle 區塊，使用頁面 ID
-            if not toggle_block_id:
-                # 獲取所有頂層區塊
-                blocks_response = requests.get(
-                    f"https://api.notion.com/v1/blocks/{page_id}/children",
-                    headers=headers
-                )
-                blocks_response.raise_for_status()
-                blocks_result = blocks_response.json()
+            # 如果有剩餘筆記區塊，分批添加到頁面
+            if remaining_note_blocks:
+                logging.info(f"- 添加剩餘 {len(remaining_note_blocks)} 個筆記區塊到頁面")
                 
-                # 查找 toggle 區塊
-                for block in blocks_result.get("results", []):
-                    if block.get("type") == "toggle":
-                        toggle_block_id = block["id"]
-                        break
+                for i in range(0, len(remaining_note_blocks), MAX_BLOCKS_PER_REQUEST):
+                    end_idx = min(i + MAX_BLOCKS_PER_REQUEST, len(remaining_note_blocks))
+                    batch = remaining_note_blocks[i:end_idx]
+                    
+                    batch_response = requests.patch(
+                        f"https://api.notion.com/v1/blocks/{page_id}/children",
+                        headers=headers,
+                        json={"children": batch}
+                    )
+                    batch_response.raise_for_status()
+                    
+                    # 防止 API 限制
+                    time.sleep(0.5)
             
-            # 分批添加逐字稿內容
-            if toggle_block_id and clean_paragraphs:
-                batch_size = 50  # 較小的批次大小，以避免 API 限制
-                total_batches = (len(clean_paragraphs) + batch_size - 1) // batch_size
+            # 將逐字稿分成多個段落 (因為 Notion API 有字符限制)
+            transcript_blocks = {"object": "block", "type": "divider", "divider": {}}
+
+            # --- 內嵌完整逐字稿區塊 (使用 toggle 區塊) ---
+            transcript_blocks.append({
+                "object": "block",
+                "type": "heading_2",
+                "heading_2": {
+                    "rich_text": [{"type": "text", "text": {"content": "🎙️ 完整逐字稿"}}]
+                }
+            })
+            # 使用 toggle 收納逐字稿
+            transcript_blocks.append({
+                "object": "block",
+                "type": "toggle",
+                "toggle": {
+                "rich_text": [{"type": "text", "text": {"content": "點擊展開完整逐字稿"}}],
+                "children": [
+                    {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [{"type": "text", "text": {"content": "此區塊包含完整逐字稿內容"}}]
+                    }
+                    },
+                    {
+                    "object": "block",
+                    "type": "divider",
+                    "divider": {}
+                    }
+                ]
+                }
+            })
+
+            transcript_blocks.append(self.notion_formatter.split_transcript_into_blocks(full_transcript))
+            total_batches = (len(transcript_blocks) + MAX_BLOCKS_PER_REQUEST - 1) // MAX_BLOCKS_PER_REQUEST
+            logging.info(f"- 開始分批添加逐字稿內容 (共 {len(transcript_blocks)} 段，分 {total_batches} 批)")
+            
+            for i in range(0, len(transcript_blocks), MAX_BLOCKS_PER_REQUEST):
+                batch_num = i // MAX_BLOCKS_PER_REQUEST + 1
+                end_idx = min(i + MAX_BLOCKS_PER_REQUEST, len(transcript_blocks))
+                current_batch = []
                 
-                logging.info(f"- 開始分批添加逐字稿內容 (共 {len(clean_paragraphs)} 段，分 {total_batches} 批)")
+                for para in transcript_blocks[i:end_idx]:
+                    current_batch.append({
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {
+                            "rich_text": [{"type": "text", "text": {"content": para}}]
+                        }
+                    })
                 
-                for i in range(0, len(clean_paragraphs), batch_size):
-                    batch_num = i // batch_size + 1
-                    end_idx = min(i + batch_size, len(clean_paragraphs))
-                    current_batch = []
+                try:
+                    append_response = requests.patch(
+                        f"https://api.notion.com/v1/blocks/{page_id}/children",
+                        headers=headers,
+                        json={"children": current_batch}
+                    )
+                    append_response.raise_for_status()
                     
-                    for para in clean_paragraphs[i:end_idx]:
-                        current_batch.append({
-                            "object": "block",
-                            "type": "paragraph",
-                            "paragraph": {
-                                "rich_text": [{"type": "text", "text": {"content": para}}]
-                            }
-                        })
-                    
-                    try:
-                        append_response = requests.patch(
-                            f"https://api.notion.com/v1/blocks/{toggle_block_id}/children",
-                            headers=headers,
-                            json={"children": current_batch}
-                        )
-                        append_response.raise_for_status()
-                        
-                        # 添加延遲以避免頻率限制
-                        if i + batch_size < len(clean_paragraphs):
-                            time.sleep(0.5)
-                    except Exception as batch_e:
-                        logging.error(f"❌ 逐字稿批次 {batch_num} 添加失敗: {batch_e}")
+                    # 添加延遲以避免頻率限制
+                    if i + MAX_BLOCKS_PER_REQUEST < len(transcript_blocks):
+                        time.sleep(0.5)
+                except Exception as batch_e:
+                    logging.error(f"❌ 逐字稿批次 {batch_num} 添加失敗: {batch_e}")
             
             logging.info(f"✅ Notion 頁面建立成功 (ID: {page_id}, URL: {page_url})")
             return page_id, page_url
@@ -719,27 +631,6 @@ class AudioProcessor:
         except Exception as e:
             logging.error(f"❌ Notion 頁面建立時發生未知錯誤: {e}", exc_info=True)
             raise
-
-    def _split_transcript_into_blocks(self, transcript: str, max_length: int = 2000) -> List[str]:
-        """將逐字稿分成適合 Notion API 的較小區塊"""
-        paragraphs = []
-        current_paragraph = ""
-        
-        lines = transcript.split("\n")
-        for line in lines:
-            if len(current_paragraph) + len(line) + 1 > max_length:
-                paragraphs.append(current_paragraph.strip())
-                current_paragraph = line
-            else:
-                if current_paragraph:
-                    current_paragraph += "\n" + line
-                else:
-                    current_paragraph = line
-        
-        if current_paragraph:
-            paragraphs.append(current_paragraph.strip())
-        
-        return paragraphs
 
     def load_models(self):
         """載入所需的 AI 模型"""
@@ -940,13 +831,55 @@ class AudioProcessor:
             os.remove(audio_path)
             audio_path = preprocessed_path
             
-        # 使用 Whisper 進行語音轉文字
+        # 使用 Whisper 進行語音轉文字，添加錯誤處理和回退機制
         logging.info("- 執行語音轉文字...")
-        asr_result = self.whisper_model.transcribe(
-            audio_path, 
-            word_timestamps=True,  # 啟用字詞時間戳記
-            verbose=False
-        )
+        asr_result = None
+        transcription_attempts = [
+            # 第一次嘗試：使用預設設置
+            {"word_timestamps": False, "verbose": False, "model_name": None, "description": "預設設置"},
+            # 第二次嘗試：使用較小的模型
+            {"word_timestamps": False, "verbose": False, "model_name": "small", "description": "使用小型模型"}
+        ]
+        
+        for i, attempt in enumerate(transcription_attempts):
+            try:
+                logging.info(f"- 嘗試轉錄 ({i+1}/{len(transcription_attempts)}): {attempt['description']}")
+                
+                # 如果指定了不同的模型大小，臨時加載該模型
+                temp_model = None
+                if attempt['model_name'] and attempt['model_name'] != "medium":
+                    temp_model = whisper.load_model(attempt['model_name'])
+                    model_to_use = temp_model
+                else:
+                    model_to_use = self.whisper_model
+                
+                # 執行轉錄
+                asr_result = model_to_use.transcribe(
+                    audio_path, 
+                    word_timestamps=attempt['word_timestamps'],
+                    verbose=attempt['verbose']
+                )
+                
+                # 如果成功，退出嘗試循環
+                logging.info(f"✅ 語音轉錄成功 ({attempt['description']})")
+                break
+            
+            except RuntimeError as e:
+                # 檢查是否是張量大小不匹配錯誤
+                if "must match the size of tensor" in str(e):
+                    logging.warning(f"⚠️ 轉錄失敗 ({attempt['description']}): 張量大小不匹配。嘗試其他參數。{e}")
+                    if i == len(transcription_attempts) - 1:
+                        logging.error("❌ 所有轉錄嘗試均失敗")
+                    raise
+                else:
+                    logging.error(f"❌ 轉錄時發生運行時錯誤: {e}")
+                    raise
+            except Exception as e:
+                logging.error(f"❌ 轉錄失敗: {e}")
+                raise
+        
+        if not asr_result:
+            raise RuntimeError("無法轉錄音頻文件")
         
         # 使用 Pyannote 進行說話人分離
         logging.info("- 執行說話人分離...")
