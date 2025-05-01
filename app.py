@@ -46,6 +46,7 @@ except ImportError:
 
 # 載入環境變數
 from dotenv import load_dotenv
+import re
 load_dotenv()
 
 # Configure basic logging
@@ -297,6 +298,61 @@ class AudioProcessor:
         # 如果都無法匹配，返回 None
         return None
 
+    def try_multiple_gemini_models(self, system_prompt: str, user_content: str, 
+                                models: List[str] = None) -> Any:
+        """Try generating content using multiple Gemini models until one succeeds.
+        
+        Args:
+            system_prompt: The system instructions for the model
+            user_content: The user content to process
+            models: List of model names to try in order (uses default list if None)
+            
+        Returns:
+            The successful generation response
+            
+        Raises:
+            Exception: If all models fail
+        """
+        # Default models list if none provided
+        if models is None:
+            models = ['gemini-2.5-pro-exp-03-25', 'gemini-2.5-flash-preview-04-17',
+                        'gemini-1.5-pro', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite']
+        
+        response = None
+        last_error = None
+
+        # Try different models until successful
+        for model_name in models:
+            try:
+                logging.info(f"🔄 使用模型: {model_name}")
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(
+                    [system_prompt, user_content]
+                )
+                # If successful, break the loop
+                logging.info(f"✅ 成功使用模型 {model_name} 生成筆記")
+                break
+            except Exception as e:
+                last_error = e
+                # Check if quota error
+                if "429" in str(e) or "quota" in str(e).lower():
+                    # Extract and log the quota documentation URL
+                    url_match = re.search(r'https?://\S+', str(e))
+                    logging.warning(f"⚠️ 模型 {model_name} 配額已用盡: {url_match.group(0)}")
+                    # Continue to next model
+                    continue
+                else:
+                    # Raise other errors
+                    logging.error(f"❌ 使用模型 {model_name} 時發生錯誤: {str(e)}")
+                    raise
+
+        # Check if all models failed
+        if response is None:
+            logging.error("❌ 所有模型都失敗了")
+            raise last_error
+        
+        return response
+
     def generate_comprehensive_notes(self, transcript: str) -> str:
         """使用 Gemini API 生成結構化的筆記"""
         logging.info("🔄 生成筆記...")
@@ -306,14 +362,11 @@ class AudioProcessor:
             system_prompt = """將錄音逐字稿整理成筆記內容，請使用Markdown格式直接輸出筆記內容:
             避免使用```markdown```，直接輸出Markdown格式的筆記內容。
             """
-            
-            # 使用新的模型
-            model = genai.GenerativeModel('gemini-2.5-pro-exp-03-25')
-            response = model.generate_content(
-                [
-                    system_prompt,
-                    f"會議逐字稿：\n{transcript}"
-                ]
+
+            # Use the function in generate_comprehensive_notes
+            response = self.try_multiple_gemini_models(
+                system_prompt,
+                f"會議逐字稿：\n{transcript}"
             )
             
             comprehensive_notes = response.text
@@ -360,29 +413,6 @@ class AudioProcessor:
 
         # --- 標題區塊 (使用日期+錄音檔案名稱) ---
         page_title = f"{formatted_date} {title}"
-
-        # --- 錄音檔案連結 ---
-        if file_id:
-            try:
-                file_info = self.drive_service.files().get(
-                    fileId=file_id, fields="name,webViewLink"
-                ).execute()
-                file_name = file_info.get('name', '音頻檔案')
-                file_link = file_info.get('webViewLink', f"https://drive.google.com/file/d/{file_id}/view")
-                
-                blocks.append({
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [
-                            {"type": "text", "text": {"content": "📁 錄音檔案: "}},
-                            {"type": "text", "text": {"content": file_name, "link": {"url": file_link}}}
-                        ]
-                    }
-                })
-                blocks.append({"object": "block", "type": "divider", "divider": {}})
-            except Exception as e:
-                logging.error(f"❌ 獲取檔案連結失敗: {str(e)}")
 
         # --- 日期區塊 ---
         blocks.append({
@@ -449,7 +479,7 @@ class AudioProcessor:
                 }
             })
             
-            # 使用 toggle list 呈現待辦事項
+            # 使用 todo list 呈現待辦事項
             todo_blocks = []
             for todo in todos:
                 todo_blocks.append({
@@ -491,8 +521,8 @@ class AudioProcessor:
         # 使用新的 NotionFormatter 來處理筆記
         note_blocks = self.notion_formatter.process_note_format_for_notion(comprehensive_notes)
         
-        # 計算已有區塊數 + 逐字稿標題區塊(1) + toggle區塊(1)
-        base_blocks_count = len(blocks) + 2
+        # 計算已有區塊數
+        base_blocks_count = len(blocks)
         available_slots = MAX_BLOCKS_PER_REQUEST - base_blocks_count
         
         # 如果筆記區塊太多，僅添加能容納的部分
@@ -532,29 +562,11 @@ class AudioProcessor:
             page_id = result["id"]
             page_url = result.get("url", f"https://www.notion.so/{page_id.replace('-', '')}")
             
-            # 如果有剩餘筆記區塊，分批添加到頁面
-            if remaining_note_blocks:
-                logging.info(f"- 添加剩餘 {len(remaining_note_blocks)} 個筆記區塊到頁面")
-                
-                for i in range(0, len(remaining_note_blocks), MAX_BLOCKS_PER_REQUEST):
-                    end_idx = min(i + MAX_BLOCKS_PER_REQUEST, len(remaining_note_blocks))
-                    batch = remaining_note_blocks[i:end_idx]
-                    
-                    batch_response = requests.patch(
-                        f"https://api.notion.com/v1/blocks/{page_id}/children",
-                        headers=headers,
-                        json={"children": batch}
-                    )
-                    batch_response.raise_for_status()
-                    
-                    # 防止 API 限制
-                    time.sleep(0.5)
-            
             # 將逐字稿分成多個段落 (因為 Notion API 有字符限制)
-            transcript_blocks = {"object": "block", "type": "divider", "divider": {}}
+            remaining_note_blocks.append({"object": "block", "type": "divider", "divider": {}})
 
             # --- 內嵌完整逐字稿區塊 (使用 toggle 區塊) ---
-            transcript_blocks.append({
+            remaining_note_blocks.append({
                 "object": "block",
                 "type": "heading_2",
                 "heading_2": {
@@ -562,59 +574,75 @@ class AudioProcessor:
                 }
             })
             # 使用 toggle 收納逐字稿
-            transcript_blocks.append({
-                "object": "block",
-                "type": "toggle",
-                "toggle": {
-                "rich_text": [{"type": "text", "text": {"content": "點擊展開完整逐字稿"}}],
-                "children": [
-                    {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [{"type": "text", "text": {"content": "此區塊包含完整逐字稿內容"}}]
-                    }
-                    },
-                    {
-                    "object": "block",
-                    "type": "divider",
-                    "divider": {}
-                    }
-                ]
-                }
-            })
-
-            transcript_blocks.append(self.notion_formatter.split_transcript_into_blocks(full_transcript))
-            total_batches = (len(transcript_blocks) + MAX_BLOCKS_PER_REQUEST - 1) // MAX_BLOCKS_PER_REQUEST
-            logging.info(f"- 開始分批添加逐字稿內容 (共 {len(transcript_blocks)} 段，分 {total_batches} 批)")
+            transcript_blocks = self.notion_formatter.split_transcript_into_blocks(full_transcript)
+            # Create toggle block for transcript with audio link at the top
+            toggle_children = []
             
-            for i in range(0, len(transcript_blocks), MAX_BLOCKS_PER_REQUEST):
-                batch_num = i // MAX_BLOCKS_PER_REQUEST + 1
-                end_idx = min(i + MAX_BLOCKS_PER_REQUEST, len(transcript_blocks))
-                current_batch = []
-                
-                for para in transcript_blocks[i:end_idx]:
-                    current_batch.append({
+            # Add audio file link at the top of the toggle content
+            if file_id:
+                try:
+                    file_info = self.drive_service.files().get(
+                        fileId=file_id, fields="name,webViewLink"
+                    ).execute()
+                    file_name = file_info.get('name', '音頻檔案')
+                    file_link = file_info.get('webViewLink', f"https://drive.google.com/file/d/{file_id}/view")
+                    
+                    toggle_children.append({
                         "object": "block",
                         "type": "paragraph",
                         "paragraph": {
-                            "rich_text": [{"type": "text", "text": {"content": para}}]
+                            "rich_text": [
+                                {"type": "text", "text": {"content": "📁 錄音檔案: "}},
+                                {"type": "text", "text": {"content": file_name, "link": {"url": file_link}}}
+                            ]
                         }
                     })
-                
+                    toggle_children.append({"object": "block", "type": "divider", "divider": {}})
+                except Exception as e:
+                    logging.error(f"❌ 獲取檔案連結失敗: {str(e)}")
+            
+            # Add explanation text and transcript blocks
+            toggle_children.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": "此區塊包含完整逐字稿內容"}}]
+                }
+            })
+            toggle_children.append({
+                "object": "block",
+                "type": "divider",
+                "divider": {}
+            })
+            toggle_children.extend(transcript_blocks)
+            
+            # Create the toggle block with all children
+            remaining_note_blocks.append({
+                "object": "block",
+                "type": "toggle",
+                "toggle": {
+                    "rich_text": [{"type": "text", "text": {"content": "點擊展開完整逐字稿"}}],
+                    "children": toggle_children
+                }
+            })
+            total_batches = (len(remaining_note_blocks) + MAX_BLOCKS_PER_REQUEST - 1) // MAX_BLOCKS_PER_REQUEST
+            logging.info(f"- 開始分批添加逐字稿內容 (共 {len(remaining_note_blocks)} 段，分 {total_batches} 批)")
+
+            for i in range(0, len(remaining_note_blocks), MAX_BLOCKS_PER_REQUEST):
+                end_idx = min(i + MAX_BLOCKS_PER_REQUEST, len(remaining_note_blocks))
                 try:
-                    append_response = requests.patch(
+                    transcript_blocks_response = requests.patch(
                         f"https://api.notion.com/v1/blocks/{page_id}/children",
                         headers=headers,
-                        json={"children": current_batch}
+                        json={"children": remaining_note_blocks[i:end_idx]}
                     )
-                    append_response.raise_for_status()
+                    transcript_blocks_response.raise_for_status()
                     
                     # 添加延遲以避免頻率限制
-                    if i + MAX_BLOCKS_PER_REQUEST < len(transcript_blocks):
+                    if i + MAX_BLOCKS_PER_REQUEST < len(remaining_note_blocks):
                         time.sleep(0.5)
                 except Exception as batch_e:
-                    logging.error(f"❌ 逐字稿批次 {batch_num} 添加失敗: {batch_e}")
+                    logging.error(f"❌ 逐字稿批次添加失敗: {batch_e}")
             
             logging.info(f"✅ Notion 頁面建立成功 (ID: {page_id}, URL: {page_url})")
             return page_id, page_url
@@ -732,13 +760,11 @@ class AudioProcessor:
             不確定的說話人請保留原代碼。回應格式必須是一個JSON，key為原始說話人代碼，value為你辨識的真實姓名/職稱。
             只需回傳JSON，不要有其他文字。
             """
-            
-            model = genai.GenerativeModel('gemini-2.5-pro-exp-03-25')
-            response = model.generate_content(
-                [
-                    system_prompt,
-                    f"對話內容如下：\n{sample_dialogue}\n\n請辨識出各個說話人代碼（如 {', '.join(original_speakers)}）對應的最可能真實姓名或職稱。"
-                ]
+
+            response = self.try_multiple_gemini_models(
+                system_prompt,
+                f"對話內容如下：\n{sample_dialogue}\n\n請辨識出各個說話人代碼（如 {', '.join(original_speakers)}）對應的最可能真實姓名或職稱。",
+                models=['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite']
             )
             
             response_text = response.text
@@ -781,12 +807,12 @@ class AudioProcessor:
             只需回傳 JSON，不要有其他文字。
             """
             
-            model = genai.GenerativeModel('gemini-2.5-pro-exp-03-25')
-            response = model.generate_content(
-                [
-                    system_prompt,
-                    f"{context}以下是會議記錄：\n{transcript}"
-                ]
+            response = self.try_multiple_gemini_models(
+                system_prompt,
+                f"{context}以下是會議記錄：\n{transcript}",
+                models=
+                ['gemini-2.5-flash-preview-04-17',
+                        'gemini-1.5-pro', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite']
             )
             
             response_text = response.text
