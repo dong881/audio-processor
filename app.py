@@ -173,78 +173,15 @@ class AudioProcessor:
             return None, None
     
     def preprocess_audio(self, audio_path: str) -> str:
-        """預處理音頻以提高處理效率 (移除靜音片段)"""
+        """預處理音頻 (僅確保格式正確)"""
         logging.info(f"🔄 預處理音頻: {os.path.basename(audio_path)}")
         
         # 確保檔案為 WAV 格式
         if not audio_path.lower().endswith('.wav'):
             audio_path = self.convert_to_wav(audio_path)
         
-        try:
-            # 檢查檔案是否存在且有效
-            if not os.path.isfile(audio_path) or os.path.getsize(audio_path) == 0:
-                logging.warning(f"⚠️ 音頻檔案不存在或為空: {audio_path}")
-                return audio_path
-                
-            # 使用 librosa 載入音頻
-            y, sr = librosa.load(audio_path, sr=None)
-            
-            # 檢查音頻資料是否有效
-            if len(y) == 0:
-                logging.warning("⚠️ 音頻資料為空，返回原始檔案")
-                return audio_path
-            
-            # 檢測非靜音片段
-            non_silent_intervals = librosa.effects.split(
-                y, top_db=20, frame_length=1024, hop_length=256
-            )
-            
-            # 如果沒有檢測到非靜音片段，返回原始檔案
-            if len(non_silent_intervals) == 0:
-                logging.warning("⚠️ 無法檢測到非靜音片段，返回原始檔案")
-                return audio_path
-            
-            # 建立新的音頻，移除靜音
-            processed_audio = np.concatenate(
-                [y[start:end] for start, end in non_silent_intervals]
-            )
-            
-            # 確保處理後的音頻不為空
-            if len(processed_audio) == 0:
-                logging.warning("⚠️ 處理後音頻為空，返回原始檔案")
-                return audio_path
-            
-            # 存儲處理後的音頻
-            processed_path = os.path.join(
-                os.path.dirname(audio_path),
-                f"processed_{os.path.basename(audio_path)}"
-            )
-            sf.write(processed_path, processed_audio, sr)
-            
-            # 驗證生成的檔案
-            if not os.path.isfile(processed_path) or os.path.getsize(processed_path) == 0:
-                logging.warning("⚠️ 處理後檔案無效，返回原始檔案")
-                return audio_path
-                
-            logging.info(f"✅ 音頻預處理完成: 移除了靜音片段")
-            
-            # 計算節省的時間百分比
-            original_duration = len(y) / sr
-            processed_duration = len(processed_audio) / sr
-            saved_percentage = (1 - processed_duration / original_duration) * 100
-            logging.info(f"   - 原始長度: {original_duration:.2f}秒, 處理後長度: {processed_duration:.2f}秒")
-            logging.info(f"   - 節省了 {saved_percentage:.2f}% 的處理時間")
-            
-            # 確保處理後的檔案長度不為零，避免後續處理問題
-            if processed_duration < 0.5:  # 如果太短（少於0.5秒）
-                logging.warning("⚠️ 處理後音頻太短，返回原始檔案")
-                return audio_path
-                
-            return processed_path
-            
-        except Exception as e:
-            logging.error(f"❌ 音頻預處理失敗: {str(e)}")
-            return audio_path
+        logging.info(f"✅ 音頻預處理完成")
+        return audio_path
 
     def rename_drive_file(self, file_id: str, new_name: str) -> bool:
         """根據處理結果重命名 Google Drive 上的檔案"""
