@@ -510,12 +510,12 @@ class AudioProcessor:
                     "rich_text": [{"type": "text", "text": {"content": "🎙️ 完整逐字稿"}}]
                 }
             })
-            # 使用 toggle 收納逐字稿
-            transcript_blocks = self.notion_formatter.split_transcript_into_blocks(full_transcript)
-            # Create toggle block for transcript with audio link at the top
-            toggle_children = []
             
-            # Add audio file link at the top of the toggle content
+            # 使用 split_transcript_into_blocks 獲取逐字稿區塊
+            transcript_blocks = self.notion_formatter.split_transcript_into_blocks(full_transcript)
+            
+            # 建立音頻檔案連結區塊
+            audio_link_blocks = []
             if file_id:
                 try:
                     file_info = self.drive_service.files().get(
@@ -524,7 +524,7 @@ class AudioProcessor:
                     file_name = file_info.get('name', '音頻檔案')
                     file_link = file_info.get('webViewLink', f"https://drive.google.com/file/d/{file_id}/view")
                     
-                    toggle_children.append({
+                    audio_link_blocks.append({
                         "object": "block",
                         "type": "paragraph",
                         "paragraph": {
@@ -534,52 +534,120 @@ class AudioProcessor:
                             ]
                         }
                     })
-                    toggle_children.append({"object": "block", "type": "divider", "divider": {}})
+                    audio_link_blocks.append({"object": "block", "type": "divider", "divider": {}})
                 except Exception as e:
                     logging.error(f"❌ 獲取檔案連結失敗: {str(e)}")
             
-            # Add explanation text and transcript blocks
-            toggle_children.append({
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [{"type": "text", "text": {"content": "此區塊包含完整逐字稿內容"}}]
-                }
-            })
-            toggle_children.append({
-                "object": "block",
-                "type": "divider",
-                "divider": {}
-            })
-            toggle_children.extend(transcript_blocks)
+            # 添加檔案連結到 remaining_note_blocks
+            remaining_note_blocks.extend(audio_link_blocks)
             
-            # Create the toggle block with all children
-            remaining_note_blocks.append({
-                "object": "block",
-                "type": "toggle",
-                "toggle": {
-                    "rich_text": [{"type": "text", "text": {"content": "點擊展開完整逐字稿"}}],
-                    "children": toggle_children
-                }
-            })
+            # 計算每個 toggle 區塊最多可以包含的 transcript_blocks 數量 (最大100個)
+            MAX_TOGGLE_CHILDREN = 90  # 保留一些空間給其他元素
+            
+            # 分割 transcript_blocks 為多個 toggle 區塊
+            for i in range(0, len(transcript_blocks), MAX_TOGGLE_CHILDREN):
+                toggle_children = []
+                end_idx = min(i + MAX_TOGGLE_CHILDREN, len(transcript_blocks))
+                
+                # 只在第一個 toggle 區塊添加說明文字
+                if i == 0:
+                    toggle_children.append({
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {
+                            "rich_text": [{"type": "text", "text": {"content": "此區塊包含完整逐字稿內容"}}]
+                        }
+                    })
+                    toggle_children.append({
+                        "object": "block",
+                        "type": "divider",
+                        "divider": {}
+                    })
+                
+                # 添加本批次的 transcript_blocks
+                toggle_children.extend(transcript_blocks[i:end_idx])
+                
+                # 建立目前批次的 toggle 區塊
+                toggle_title = "點擊展開完整逐字稿"
+                if i > 0:  # 如果不是第一個 toggle，添加序號
+                    part_num = (i // MAX_TOGGLE_CHILDREN) + 1
+                    total_parts = (len(transcript_blocks) + MAX_TOGGLE_CHILDREN - 1) // MAX_TOGGLE_CHILDREN
+                    toggle_title = f"點擊展開完整逐字稿 (第 {part_num}/{total_parts} 部分)"
+                
+                remaining_note_blocks.append({
+                    "object": "block",
+                    "type": "toggle",
+                    "toggle": {
+                        "rich_text": [{"type": "text", "text": {"content": toggle_title}}],
+                        "children": toggle_children
+                    }
+                })
+            
             total_batches = (len(remaining_note_blocks) + MAX_BLOCKS_PER_REQUEST - 1) // MAX_BLOCKS_PER_REQUEST
             logging.info(f"- 開始分批添加逐字稿內容 (共 {len(remaining_note_blocks)} 段，分 {total_batches} 批)")
 
+            # Validate Notion token before making requests
+            if not notion_token or notion_token.strip() == "":
+                raise ValueError("無效的 Notion API Token")
+
+            # Add retry logic for batch additions
             for i in range(0, len(remaining_note_blocks), MAX_BLOCKS_PER_REQUEST):
                 end_idx = min(i + MAX_BLOCKS_PER_REQUEST, len(remaining_note_blocks))
-                try:
-                    transcript_blocks_response = requests.patch(
-                        f"https://api.notion.com/v1/blocks/{page_id}/children",
-                        headers=headers,
-                        json={"children": remaining_note_blocks[i:end_idx]}
-                    )
-                    transcript_blocks_response.raise_for_status()
-                    
-                    # 添加延遲以避免頻率限制
-                    if i + MAX_BLOCKS_PER_REQUEST < len(remaining_note_blocks):
-                        time.sleep(0.5)
-                except Exception as batch_e:
-                    logging.error(f"❌ 逐字稿批次添加失敗: {batch_e}")
+                batch_num = i // MAX_BLOCKS_PER_REQUEST + 1
+                max_retries = 3
+                retry_count = 0
+                
+                while retry_count < max_retries:
+                    try:
+                        logging.info(f"- 添加第 {batch_num}/{total_batches} 批逐字稿內容 (第 {retry_count + 1} 次嘗試)")
+                        transcript_blocks_response = requests.patch(
+                            f"https://api.notion.com/v1/blocks/{page_id}/children",
+                            headers=headers,
+                            json={"children": remaining_note_blocks[i:end_idx]},
+                            timeout=30  # Add timeout to prevent hanging requests
+                        )
+                        
+                        if transcript_blocks_response.status_code in [401, 403]:
+                            logging.error(f"❌ 認證錯誤 (狀態碼: {transcript_blocks_response.status_code}): 請確認 Notion API Token 有效")
+                            try:
+                                error_details = transcript_blocks_response.json()
+                                logging.error(f"   詳細錯誤: {json.dumps(error_details, indent=2, ensure_ascii=False)}")
+                            except:
+                                logging.error(f"   回應內容: {transcript_blocks_response.text}")
+                            break  # Authentication errors won't be fixed by retrying
+                            
+                        transcript_blocks_response.raise_for_status()
+                        logging.info(f"✅ 第 {batch_num}/{total_batches} 批逐字稿內容添加成功")
+                        break  # Success - exit retry loop
+                        
+                    except requests.exceptions.RequestException as e:
+                        retry_count += 1
+                        logging.warning(f"⚠️ 第 {batch_num}/{total_batches} 批逐字稿添加失敗 (嘗試 {retry_count}/{max_retries}): {e}")
+                        
+                        # Check specific error types
+                        if hasattr(e, 'response') and e.response is not None:
+                            try:
+                                err_details = e.response.json()
+                                logging.error(f"   錯誤詳情: {json.dumps(err_details, indent=2, ensure_ascii=False)}")
+                                
+                                # Check for specific Notion API errors
+                                if 'message' in err_details and 'block contents are invalid' in err_details['message'].lower():
+                                    logging.error("   可能存在無效的區塊內容，嘗試簡化處理...")
+                                    # Simplify blocks if needed in future iterations
+                                
+                            except json.JSONDecodeError:
+                                logging.error(f"   響應內容 (非 JSON): {e.response.text}")
+                        
+                        if retry_count < max_retries:
+                            wait_time = 2 ** retry_count  # Exponential backoff
+                            logging.info(f"   等待 {wait_time} 秒後重試...")
+                            time.sleep(wait_time)
+                        else:
+                            logging.error(f"❌ 第 {batch_num}/{total_batches} 批逐字稿添加失敗，已達最大重試次數")
+                
+                # Add a small delay between batches to avoid rate limiting
+                if i + MAX_BLOCKS_PER_REQUEST < len(remaining_note_blocks) and retry_count < max_retries:
+                    time.sleep(1)
             
             logging.info(f"✅ Notion 頁面建立成功 (ID: {page_id}, URL: {page_url})")
             return page_id, page_url
