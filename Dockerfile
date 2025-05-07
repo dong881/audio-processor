@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.9
 
 # 安裝系統依賴
 RUN apt-get update && apt-get install -y \
@@ -18,10 +18,8 @@ RUN groupadd -r appuser && useradd --no-log-init -r -g appuser -d /home/appuser 
 COPY requirements.txt ./
 
 # 升級 pip 並安裝 Python 依賴 (忽略 build-time root warning as final container runs non-root)
-RUN pip install --no-cache-dir --upgrade pip --root-user-action=ignore
-# 明確安裝 OpenAI Whisper 套件
-RUN pip install --no-cache-dir openai-whisper --root-user-action=ignore
-RUN pip install --no-cache-dir -r requirements.txt --root-user-action=ignore
+RUN pip install --no-cache-dir --upgrade pip --root-user-action=ignore && \
+    pip install --no-cache-dir -r requirements.txt --root-user-action=ignore
 
 # 複製其餘的檔案
 COPY . .

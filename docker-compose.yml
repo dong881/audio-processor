@@ -2,9 +2,7 @@ version: '3'
 
 services:
   audio-processor:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     ports:
       - "5000:5000"
     environment:
@@ -19,5 +17,10 @@ services:
     env_file:
       - .env
     volumes:
+      - .:/app
       - ./credentials:/app/credentials
+      - pip_cache:/root/.cache/pip
     restart: unless-stopped
+
+volumes:
+  pip_cache:
