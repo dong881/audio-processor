@@ -22,6 +22,8 @@ RUN pip install --no-cache-dir --upgrade pip --root-user-action=ignore
 # 明確安裝 OpenAI Whisper 套件
 RUN pip install --no-cache-dir openai-whisper --root-user-action=ignore
 RUN pip install --no-cache-dir -r requirements.txt --root-user-action=ignore
+# Fix oauth2client version to solve file_cache compatibility issue
+RUN pip install --no-cache-dir oauth2client==3.0.0 --root-user-action=ignore
 
 # 複製其餘的檔案
 COPY . .

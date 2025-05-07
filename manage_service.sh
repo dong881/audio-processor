@@ -11,37 +11,37 @@ NC='\033[0m' # No Color
 case "$1" in
   start)
     echo -e "${GREEN}Starting audio-processor service...${NC}"
-    docker-compose up -d
+    docker compose up -d
     ;;
   stop)
     echo -e "${YELLOW}Stopping audio-processor service...${NC}"
-    docker-compose stop audio-processor
+    docker compose stop audio-processor
     ;;
   restart)
     echo -e "${YELLOW}Restarting audio-processor service...${NC}"
-    docker-compose restart audio-processor
+    docker compose restart audio-processor
     ;;
   update)
     echo -e "${BLUE}Updating audio-processor service...${NC}"
     echo -e "${YELLOW}Stopping audio-processor service...${NC}"
-    docker-compose stop audio-processor
+    docker compose stop audio-processor
     
     echo -e "${YELLOW}Removing audio-processor container...${NC}"
-    docker-compose rm -f audio-processor
+    docker compose rm -f audio-processor
     
     echo -e "${BLUE}Building audio-processor image...${NC}"
-    docker-compose build audio-processor
+    docker compose build audio-processor
     
     echo -e "${GREEN}Starting audio-processor service...${NC}"
-    docker-compose up -d
+    docker compose up -d
     ;;
   logs)
     echo -e "${BLUE}Showing logs from audio-processor (Ctrl+C to exit)...${NC}"
-    docker-compose logs -f audio-processor
+    docker compose logs -f audio-processor
     ;;
   status)
     echo -e "${BLUE}Checking status of audio-processor service...${NC}"
-    docker-compose ps audio-processor
+    docker compose ps audio-processor
     ;;
   clean)
     echo -e "${YELLOW}Cleaning unused Docker images...${NC}"
