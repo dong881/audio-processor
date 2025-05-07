@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WearNote - 登入</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        :root {
+            --primary-color: #4a6fa5;
+            --accent-color: #4caf50;
+            --background-color: #f5f8fa;
+            --card-background: #ffffff;
+            --text-color: #333333;
+            --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: var(--background-color);
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .login-container {
+            width: 100%;
+            max-width: 450px;
+            background-color: var(--card-background);
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: var(--shadow);
+            text-align: center;
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            background-color: var(--primary-color);
+            color: white;
+            font-size: 2rem;
+            font-weight: bold;
+        }
+
+        h1 {
+            font-size: 1.8rem;
+            color: var(--primary-color);
+            margin-bottom: 10px;
+        }
+
+        p {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1rem;
+        }
+
+        .login-button {
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 12px 20px;
+            font-size: 1rem;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color 0.2s;
+            text-decoration: none;
+        }
+
+        .login-button:hover {
+            background-color: #3e8e41;
+        }
+
+        .login-button img {
+            width: 24px;
+            margin-right: 10px;
+        }
+
+        .message {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+            display: none;
+        }
+
+        .error {
+            background-color: #ffebee;
+            color: #c62828;
+            border-left: 4px solid #c62828;
+        }
+
+        .info {
+            background-color: #e3f2fd;
+            color: #1565c0;
+            border-left: 4px solid #1565c0;
+        }
+
+        .loading {
+            display: none;
+            margin: 20px auto;
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(74, 111, 165, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid var(--primary-color);
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">W</div>
+        <h1>WearNote</h1>
+        <p>請使用您的 Google 帳號登入以存取錄音檔案</p>
+        
+        <a id="google-login-btn" href="/api/auth/google/login" class="login-button">
+            <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google Logo">
+            使用 Google 帳號登入
+        </a>
+        
+        <div id="loading" class="loading"></div>
+        <div id="message" class="message"></div>
+    </div>
+
+    <script>
+        const messageBox = document.getElementById('message');
+        const loadingIndicator = document.getElementById('loading');
+        const googleLoginBtn = document.getElementById('google-login-btn');
+        
+        function showMessage(text, type = 'info') {
+            messageBox.textContent = text;
+            messageBox.className = `message ${type}`;
+            messageBox.style.display = 'block';
+        }
+        
+        function showLoading(show = true) {
+            loadingIndicator.style.display = show ? 'block' : 'none';
+            if (show) {
+                googleLoginBtn.style.display = 'none';
+            } else {
+                googleLoginBtn.style.display = 'inline-flex';
+            }
+        }
+        
+        // Check for error message in URL parameters
+        document.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const error = urlParams.get('error');
+            
+            if (error) {
+                showMessage(decodeURIComponent(error), 'error');
+            }
+            
+            // Add click handler to login button
+            googleLoginBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                showLoading(true);
+                window.location.href = this.href;
+            });
+            
+            // Check if already authenticated
+            fetch('/api/auth/status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.authenticated) {
+                        window.location.href = '/';
+                    }
+                })
+                .catch(error => {
+                    console.error('Auth status check error:', error);
+                });
+        });
+    </script>
+</body>
+</html> 

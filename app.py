@@ -15,7 +15,7 @@ from typing import Dict, List, Tuple, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 # Flask 相關
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template, redirect, url_for, session, send_from_directory
 import requests
 
 # Google API 相關
@@ -52,7 +52,10 @@ load_dotenv()
 # Configure basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-app = Flask(__name__)
+app = Flask(__name__, 
+            static_folder='static',
+            template_folder='templates')
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev_secret_key')  # 為session設置密鑰
 
 # 工作狀態定義
 JOB_STATUS = {
@@ -1350,6 +1353,146 @@ def get_active_jobs_endpoint():
     except Exception as e:
         logging.error(f"API 錯誤: {e}", exc_info=True)
         return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+
+# ===== 前端路由 =====
+@app.route('/')
+def index():
+    """主頁面"""
+    return render_template('index.html')
+
+@app.route('/login')
+def login():
+    """登入頁面"""
+    return render_template('login.html')
+
+@app.route('/callback')
+def callback():
+    """OAuth回調頁面"""
+    return render_template('callback.html')
+
+# ===== 驗證API =====
+@app.route('/api/auth/google')
+def auth_google():
+    """重定向到 Google OAuth"""
+    # 注意: 這裡需要根據實際的OAuth設置實現
+    # 這是一個簡化的示例
+    return redirect('/api/auth/callback')
+
+@app.route('/api/auth/google/login')
+def auth_google_login():
+    """Google 登入入口點"""
+    # 與 auth_google 功能相同，為了兼容性提供
+    return redirect('/api/auth/google')
+
+@app.route('/api/auth/callback')
+def auth_callback():
+    """處理OAuth回調"""
+    # 注意: 這裡需要根據實際的OAuth流程實現
+    code = request.args.get('code')
+    if code:
+        # 處理授權碼，獲取token等操作...
+        session['authenticated'] = True
+        return redirect('/callback')
+    else:
+        return redirect('/login?error=No+authorization+code+received')
+
+@app.route('/api/auth/token', methods=['POST'])
+def auth_token():
+    """將授權碼轉換為令牌"""
+    data = request.json
+    code = data.get('code')
+    
+    if not code:
+        return jsonify({'success': False, 'error': 'No authorization code provided'})
+    
+    # 實際應用中這裡需要與OAuth提供商交換令牌
+    # 為了示例，我們簡單地設置session
+    session['authenticated'] = True
+    
+    return jsonify({'success': True})
+
+@app.route('/api/auth/status')
+def auth_status():
+    """檢查用戶認證狀態"""
+    authenticated = session.get('authenticated', False)
+    
+    if authenticated:
+        # 簡化示例：實際應用需要從OAuth token獲取用戶資訊
+        user = {
+            'id': '12345',
+            'name': '示例用戶',
+            'email': 'user@example.com',
+            'picture': 'https://via.placeholder.com/150'
+        }
+        return jsonify({
+            'authenticated': True,
+            'user': user
+        })
+    else:
+        return jsonify({
+            'authenticated': False
+        })
+
+@app.route('/api/auth/logout', methods=['POST'])
+def auth_logout():
+    """登出用戶"""
+    session.clear()
+    return jsonify({'success': True})
+
+@app.route('/drive/files')
+def drive_files():
+    """獲取Google Drive檔案列表"""
+    # 檢查認證
+    if not session.get('authenticated', False):
+        return jsonify({
+            'success': False,
+            'error': 'Not authenticated'
+        }), 401
+    
+    # 注意: 實際應用中應調用Drive API獲取檔案
+    # 這裡提供示例資料用於前端開發
+    audio_files = [
+        {
+            'id': 'audio1',
+            'name': '會議錄音 2023-05-01.m4a',
+            'mimeType': 'audio/x-m4a',
+            'size': 12582912  # 12 MB
+        },
+        {
+            'id': 'audio2',
+            'name': 'REC_20230510_142355.wav',
+            'mimeType': 'audio/wav',
+            'size': 31457280  # 30 MB
+        },
+        {
+            'id': 'audio3',
+            'name': '銷售會議討論.mp3',
+            'mimeType': 'audio/mp3',
+            'size': 8388608  # 8 MB
+        }
+    ]
+    
+    pdf_files = [
+        {
+            'id': 'pdf1',
+            'name': '會議議程.pdf',
+            'mimeType': 'application/pdf',
+            'size': 1048576  # 1 MB
+        },
+        {
+            'id': 'pdf2',
+            'name': '季度報告.pdf',
+            'mimeType': 'application/pdf',
+            'size': 3145728  # 3 MB
+        }
+    ]
+    
+    files = audio_files + pdf_files
+    
+    return jsonify({
+        'success': True,
+        'files': files
+    })
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))

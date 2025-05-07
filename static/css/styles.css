@@ -1,0 +1,109 @@
+:root {
+    --primary-color: #4a6fa5;
+    --secondary-color: #166088;
+    --accent-color: #4caf50;
+    --background-color: #f8f9fa;
+    --card-background: #ffffff;
+    --text-color: #333333;
+    --border-color: #e0e0e0;
+    --hover-color: #f1f5f9;
+    --selected-color: #e6f7ff;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+    color: var(--text-color);
+    background-color: var(--background-color);
+}
+
+.logo {
+    width: 48px;
+    height: 48px;
+    margin-right: 0.75rem;
+}
+
+.app-card {
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    border-radius: 10px;
+    border: none;
+    overflow: hidden;
+    margin-bottom: 1.5rem;
+}
+
+.app-card-header {
+    background-color: #4361ee;
+    color: white;
+    padding: 0.75rem 1rem;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.progress {
+    height: 1.5rem;
+    border-radius: 0.25rem;
+}
+
+.result-card {
+    border-left: 4px solid #4895ef;
+}
+
+.btn-primary {
+    background-color: #4361ee;
+    border-color: #4361ee;
+}
+
+.btn-primary:hover {
+    background-color: #3949ab;
+    border-color: #3949ab;
+}
+
+/* 登入頁面特有樣式 */
+.login-container {
+    width: 100%;
+    max-width: 450px;
+    background-color: var(--card-background);
+    border-radius: 12px;
+    padding: 30px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    text-align: center;
+    margin: 50px auto;
+}
+
+/* Message alerts */
+.message-box {
+    padding: 15px;
+    border-radius: 4px;
+    margin-bottom: 15px;
+}
+
+.message-error {
+    background-color: #ffebee;
+    color: #c62828;
+    border-left: 4px solid #c62828;
+}
+
+.message-info {
+    background-color: #e3f2fd;
+    color: #1565c0;
+    border-left: 4px solid #1565c0;
+}
+
+.message-success {
+    background-color: #e8f5e9;
+    color: #2e7d32;
+    border-left: 4px solid #2e7d32;
+}
+
+/* 響應式調整 */
+@media (max-width: 992px) {
+    .container {
+        padding: 15px;
+    }
+} 
