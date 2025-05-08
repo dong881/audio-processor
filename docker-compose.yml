@@ -1,5 +1,3 @@
-version: '3'
-
 services:
   audio-processor:
     build: .
@@ -12,15 +10,23 @@ services:
       - HF_HOME=/app/.cache/huggingface
       - TORCH_HOME=/app/.cache/torch
       - PYANNOTE_CACHE=/app/.cache/pyannote
+      # OAuth and credentials configuration - 明確設置容器內的路徑，避免路徑轉換
+      - GOOGLE_SA_JSON_PATH=/app/credentials/service-account.json
+      - GOOGLE_CLIENT_SECRET_PATH=/app/credentials/client_secret.json
+      - EXTERNAL_URL=http://localhost:5000
+      - OAUTHLIB_INSECURE_TRANSPORT=1  # 允許在非HTTPS下進行OAuth (開發環境使用)
+      - OAUTHLIB_RELAX_TOKEN_SCOPE=1   # 放寬令牌作用域檢查
       # Optional: Set home directory explicitly for other potential needs
       - HOME=/home/appuser
     env_file:
       - .env
     volumes:
       - .:/app
-      - ./credentials:/app/credentials
+      - ./credentials:/app/credentials:ro
+      - model_cache:/app/.cache
       - pip_cache:/root/.cache/pip
     restart: unless-stopped
 
 volumes:
   pip_cache:
+  model_cache:

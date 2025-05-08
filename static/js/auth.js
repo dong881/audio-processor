@@ -4,10 +4,18 @@
 async function checkAuthStatus() {
     try {
         const response = await fetch('/api/auth/status');
+        
+        // 處理非200響應
+        if (!response.ok) {
+            console.error(`Auth status check failed with status: ${response.status}`);
+            window.location.href = '/login?error=' + encodeURIComponent('認證狀態檢查失敗，請重新登入');
+            return null;
+        }
+        
         const data = await response.json();
         
         if (!data.authenticated) {
-            // If not authenticated, redirect to login
+            console.log('用戶未認證，重定向到登入頁面');
             window.location.href = '/login';
             return null;
         }
@@ -29,6 +37,8 @@ async function logoutUser() {
         window.location.href = '/login';
     } catch (error) {
         console.error('Logout failed:', error);
+        // 即使登出 API 失敗，也強制重定向到登入頁面
+        window.location.href = '/login';
     }
 }
 
@@ -48,6 +58,12 @@ async function createRecordingsFolder() {
 // Update the UI with user information
 function updateUserInfoUI(user) {
     const userInfoElement = document.getElementById('user-info');
+    
+    // 檢查元素是否存在
+    if (!userInfoElement) {
+        console.warn('user-info元素不存在，無法更新用戶信息UI');
+        return;
+    }
     
     if (!user) {
         userInfoElement.innerHTML = '<div class="user-loading">未登入</div>';
@@ -91,4 +107,4 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 更新用戶信息UI
         updateUserInfoUI(user);
     }
-}); 
+});

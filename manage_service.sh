@@ -34,6 +34,9 @@ case "$1" in
     
     echo -e "${GREEN}Starting audio-processor service...${NC}"
     docker compose up -d
+
+    echo -e "${BLUE}Showing logs from audio-processor (Ctrl+C to exit)...${NC}"
+    docker compose logs -f audio-processor
     ;;
   logs)
     echo -e "${BLUE}Showing logs from audio-processor (Ctrl+C to exit)...${NC}"

@@ -1,5 +1,6 @@
 // 全局變數
 const API_BASE_URL = '';  // 空字串表示相對路徑
+let googleAuthInitialized = false;
 let activeJobsTimer = null;
 let currentJobId = null;
 let jobStatusTimer = null;
@@ -45,8 +46,8 @@ document.addEventListener('DOMContentLoaded', () => {
 function initApp() {
     // 檢查用戶認證狀態
     checkAuthStatus()
-        .then(user => {
-            if (user) {
+        .then(isAuthenticated => {
+            if (isAuthenticated) {
                 showAuthenticatedUI();
                 loadDriveFiles();
                 startActiveJobsPolling();
@@ -63,7 +64,14 @@ function initApp() {
 
 // 設置事件監聽器
 function setupEventListeners() {
-    // 登入/登出按鈕已在 auth.js 中設置
+    // 登入/登出按鈕
+    if (elements.loginButton) {
+        elements.loginButton.addEventListener('click', handleLogin);
+    }
+    
+    if (elements.logoutButton) {
+        elements.logoutButton.addEventListener('click', handleLogout);
+    }
     
     // 刷新文件列表按鈕
     if (elements.refreshFilesBtn) {
@@ -78,6 +86,36 @@ function setupEventListeners() {
     // 顯示活躍任務按鈕
     if (elements.showActiveJobsBtn) {
         elements.showActiveJobsBtn.addEventListener('click', toggleActiveJobs);
+    }
+}
+
+// ===== 認證相關函數 =====
+
+// 檢查用戶認證狀態
+async function checkAuthStatus() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/status`);
+        const data = await response.json();
+        return data.authenticated === true;
+    } catch (error) {
+        console.error('檢查認證狀態失敗:', error);
+        return false;
+    }
+}
+
+// 處理登入
+function handleLogin() {
+    window.location.href = `${API_BASE_URL}/api/auth/google`;
+}
+
+// 處理登出
+async function handleLogout() {
+    try {
+        await fetch(`${API_BASE_URL}/api/auth/logout`);
+        window.location.reload();
+    } catch (error) {
+        console.error('登出失敗:', error);
+        showError('登出失敗。請稍後再試。');
     }
 }
 
@@ -307,11 +345,21 @@ async function checkJobStatus(jobId) {
     try {
         const response = await fetch(`${API_BASE_URL}/job/${jobId}`);
         
-        if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+        // 先檢查狀態碼，再解析JSON
+        if (response.status === 404) {
+            console.error(`任務 ${jobId} 不存在，可能已過期或被刪除`);
+            showError(`任務不存在或已過期，請重新提交處理請求`);
+            resetProcessButton();
+            clearTimeout(jobStatusTimer);
+            currentJobId = null;
+            return;
         }
         
         const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error ${response.status}: ${data.error || '未知錯誤'}`);
+        }
         
         if (data.success && data.job) {
             const job = data.job;
@@ -347,7 +395,7 @@ async function checkJobStatus(jobId) {
         }
     } catch (error) {
         console.error('檢查任務狀態失敗:', error);
-        showError('檢查任務狀態失敗。請稍後再試。');
+        showError(`檢查任務狀態失敗: ${error.message}`);
         resetProcessButton();
         clearTimeout(jobStatusTimer);
         currentJobId = null;
@@ -423,10 +471,14 @@ function jobFailed(job) {
     resetProcessButton();
     
     // 顯示錯誤訊息
-    showError(`處理失敗: ${job.error || '未知錯誤'}`);
+    const errorMsg = job.error || '未知錯誤';
+    showError(`處理失敗: ${errorMsg}`);
     
     // 隱藏進度區域
     elements.progressContainer.classList.add('d-none');
+    
+    // 在控制台輸出詳細錯誤信息以便調試
+    console.error('任務處理失敗:', job);
 }
 
 // ===== 活躍任務管理 =====
@@ -461,7 +513,7 @@ async function fetchActiveJobs() {
         
         if (data.success) {
             // 更新活躍任務按鈕顯示
-            const activeJobsCount = Object.keys(data.jobs || {}).length;
+            const activeJobsCount = Object.keys(data.active_jobs || {}).length;
             
             if (elements.showActiveJobsBtn) {
                 if (activeJobsCount > 0) {
@@ -477,7 +529,7 @@ async function fetchActiveJobs() {
             
             // 更新任務列表（如果已顯示）
             if (!elements.jobsList.classList.contains('d-none')) {
-                updateJobsList(data.jobs || {});
+                updateJobsList(data.active_jobs || {});
             }
         }
     } catch (error) {
@@ -568,4 +620,4 @@ function formatFileSize(bytes) {
     const i = Math.floor(Math.log(bytes) / Math.log(1024));
     
     return (bytes / Math.pow(1024, i)).toFixed(2) + ' ' + sizes[i];
-} 
+}
