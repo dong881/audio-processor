@@ -252,6 +252,7 @@ p {
   font-size: 1rem;
   padding-left: 2.25rem;
   position: relative;
+  white-space: nowrap;
 }
 
 .form-check-label::before {
@@ -288,10 +289,428 @@ p {
   box-shadow: 0 0 0 0.25rem rgba(74, 111, 165, 0.25);
 }
 
-.file-icon {
-  font-size: 1.5rem;
-  margin-right: 0.75rem;
-  color: var(--primary-color);
+/* 改善開關控件樣式 */
+.form-check.form-switch {
+  position: relative;
+  padding: 0;
+  width: 3.2em;
+  height: 1.6em;
+  margin: 0;
+  cursor: pointer;
+  padding-left: 0;
+}
+
+/* 隱藏原生checkbox */
+.form-check-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+}
+
+/* 過濾圖標樣式 */
+.filter-icon {
+  position: absolute;
+  right: 0.5em;
+  top: 50%;
+  transform: translateY(-50%);
+  color: white;
+  font-size: 0.8em;
+  z-index: 2;
+}
+
+/* 自定義開關背景 */
+.form-check.form-switch::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 3.2em;
+  height: 1.6em;
+  background-color: #6c757d;
+  border-radius: 1em;
+  transition: background-color 0.3s;
+}
+
+/* 自定義開關圓鈕 */
+.form-check.form-switch::after {
+  content: "";
+  position: absolute;
+  left: 0.2em;
+  top: 0.2em;
+  width: 1.2em;
+  height: 1.2em;
+  background-color: white;
+  border-radius: 50%;
+  transform: translateX(0);
+  transition: transform 0.3s ease-in-out;
+  z-index: 1;
+}
+
+/* 開關狀態樣式 */
+.recording-filter.form-check-input:checked + .filter-icon,
+.recording-filter input:checked ~ .filter-icon {
+  color: #28a745;
+}
+
+.pdf-filter.form-check-input:checked + .filter-icon,
+.pdf-filter input:checked ~ .filter-icon {
+  color: #0275d8;
+}
+
+/* 切換狀態時的背景與指示器變化 */
+.recording-filter input:checked ~ .form-check.form-switch::before,
+.recording-filter.form-check.form-switch.checked::before {
+  background-color: #28a745;
+}
+
+.pdf-filter input:checked ~ .form-check.form-switch::before,
+.pdf-filter.form-check.form-switch.checked::before {
+  background-color: #0275d8;
+}
+
+.form-check.form-switch.checked::after,
+.form-check-input:checked ~ .form-check.form-switch::after {
+  transform: translateX(1.6em);
+}
+
+/* Tooltip 樣式 - 修正淡入淡出 */
+.tooltip {
+  position: absolute;
+  z-index: 1080;
+  display: block;
+  font-family: 'Roboto', sans-serif;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  text-decoration: none;
+  text-shadow: none;
+  text-transform: none;
+  letter-spacing: normal;
+  word-break: normal;
+  word-spacing: normal;
+  white-space: normal;
+  line-break: auto;
+  font-size: 0.95rem;
+  max-width: 250px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.tooltip.show {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* 覆蓋Bootstrap原有的tooltip動畫 */
+.tooltip.fade {
+  transition: opacity 0.3s !important;
+  transform: none !important;
+}
+
+.tooltip.fade.show {
+  opacity: 0.9 !important;
+}
+
+/* 改善開關控件樣式 */
+.form-check.form-switch {
+  position: relative;
+  padding-left: 0;
+  min-width: 3.6em;
+  margin-bottom: 0;
+}
+
+/* 隱藏原生checkbox */
+.form-check-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+}
+
+.form-check-label {
+  padding-left: 3.8em;
+  cursor: pointer;
+  color: white;
+  font-weight: 500;
+  font-size: 0.85rem;
+  margin-bottom: 0;
+  white-space: nowrap;
+  user-select: none;
+}
+
+/* 自定義開關背景 */
+.form-check-label::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3.2em;
+  height: 1.6em;
+  background-color: #6c757d;
+  border-radius: 1em;
+  transition: background-color 0.3s;
+}
+
+/* 自定義開關圓鈕 */
+.form-check-label::after {
+  content: "";
+  position: absolute;
+  left: 0.2em;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1.2em;
+  height: 1.2em;
+  background-color: white;
+  border-radius: 50%;
+  transition: transform 0.3s ease-in-out;
+}
+
+/* 開關狀態樣式 */
+.recording-filter input:checked + .form-check-label::before {
+  background-color: #28a745;
+}
+
+.pdf-filter input:checked + .form-check-label::before {
+  background-color: #0275d8;
+}
+
+.form-check-input:checked + .form-check-label::after {
+  transform: translate(1.6em, -50%);
+}
+
+/* 開關文字狀態 */
+.form-check-label::before {
+  content: "OFF";
+  color: white;
+  font-size: 0.7em;
+  font-weight: 600;
+  text-align: right;
+  padding-right: 0.5em;
+  line-height: 1.6em;
+}
+
+.form-check-input:checked + .form-check-label::before {
+  content: "ON";
+  text-align: left;
+  padding-right: 0;
+  padding-left: 0.5em;
+}
+
+/* 標題區域控制項樣式 */
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* 優化 filter-toggle-container 樣式 */
+.filter-toggle-container {
+  position: relative;
+  opacity: 1;
+  width: 3.6em;
+  height: 1.8em;
+  margin: 0;
+  background-image: none;
+  background-color: #ccc;
+  border-radius: 1em;
+  border: none;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+}
+
+.form-switch .form-check-input:focus {
+  box-shadow: 0 0 0 0.25rem rgba(25, 135, 84, 0.25);
+  border: none;
+  outline: none;
+}
+
+.form-switch .form-check-input:checked {
+  background-color: #198754;
+  border-color: #198754;
+}
+
+/* ON/OFF 文字標示 */
+.form-switch .form-check-input::before {
+  content: "OFF";
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  right: 0.5em;
+  color: white;
+  font-size: 0.75em;
+  font-weight: 600;
+  text-transform: uppercase;
+  transition: opacity 0.3s;
+}
+
+.form-switch .form-check-input:checked::before {
+  content: "ON";
+  right: auto;
+  left: 0.5em;
+}
+
+/* 滑動按鈕 */
+.form-switch .form-check-input::after {
+  content: "";
+  position: absolute;
+  top: 0.2em;
+  left: 0.2em;
+  width: 1.4em;
+  height: 1.4em;
+  background-color: white;
+  border-radius: 50%;
+  transform: translateX(0);
+  transition: transform 0.3s ease-in-out, background-color 0.3s;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
+}
+
+.form-switch .form-check-input:checked::after {
+  transform: translateX(1.8em);
+}
+
+/* 標籤文字樣式 */
+.form-switch .form-check-label {
+  padding-left: 0.75em;
+  cursor: pointer;
+  color: white;
+  font-weight: 500;
+  margin-bottom: 0;
+  user-select: none;
+}
+
+/* 獨立開關風格差異 */
+.recording-filter .form-check-input {
+  background-color: #6c757d;
+}
+
+.recording-filter .form-check-input:checked {
+  background-color: #28a745;
+}
+
+.pdf-filter .form-check-input {
+  background-color: #6c757d;
+}
+
+.pdf-filter .form-check-input:checked {
+  background-color: #0275d8;
+}
+
+/* Tooltip 樣式 - 統一定義 */
+.tooltip {
+  position: absolute;
+  z-index: 1080;
+  display: block;
+  font-family: 'Roboto', sans-serif;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  text-decoration: none;
+  text-shadow: none;
+  text-transform: none;
+  letter-spacing: normal;
+  word-break: normal;
+  word-spacing: normal;
+  white-space: normal;
+  line-break: auto;
+  font-size: 0.95rem;
+  max-width: 250px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(5px);
+  transition: opacity 0.3s ease, visibility 0.3s ease, transform 0.3s ease;
+  pointer-events: none;
+}
+
+.tooltip.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.tooltip-inner {
+  max-width: 250px;
+  padding: 0.75rem 1rem;
+  color: #fff;
+  text-align: center;
+  background-color: rgba(38, 50, 56, 0.95);
+  border-radius: 0.5rem;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.tooltip-arrow {
+  position: absolute;
+  width: 0;
+  height: 0;
+  border-color: transparent;
+  border-style: solid;
+}
+
+/* 修改Tooltip動畫為淡入淡出 */
+.tooltip {
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.tooltip.show {
+  opacity: 1;
+}
+
+/* 覆蓋Bootstrap原有的tooltip動畫 */
+.tooltip.fade {
+  transition: opacity 0.3s !important;
+  transform: none !important;
+}
+
+.tooltip.fade.show {
+  opacity: 0.9 !important;
+}
+
+/* 動畫效果 */
+@keyframes fadeInRight {
+  from {
+    opacity: 0;
+    transform: translateX(50px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* 開關變換動畫 */
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.pulse {
+  animation: pulse 0.3s ease-in-out;
 }
 
 /* 檔案選擇新樣式 */
@@ -303,6 +722,7 @@ p {
   margin-bottom: 1rem;
   display: flex;
   align-items: center;
+  margin-right: 0.5rem;
   cursor: pointer;
   transition: all 0.25s ease;
   background-color: white;
@@ -447,32 +867,6 @@ p {
   border-left-color: #2196f3;
 }
 
-/* 動畫效果 */
-@keyframes fadeInRight {
-  from {
-    opacity: 0;
-    transform: translateX(50px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes fadeOut {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
 /* 加載動畫 */
 .spinner-border {
   display: inline-block;
@@ -599,24 +993,90 @@ p {
   transform: translateY(-2px);
 }
 
-/* 美化刷新按鈕 */
+/* 隱藏實際的 checkbox */
+.toggle-input {
+  height: 0;
+  width: 0;
+  visibility: hidden;
+  position: absolute;
+}
+
+/* 優化 toggle-label 樣式 */
+.toggle-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  position: relative;
+}
+
+/* 優化 toggle-track 樣式 */
+.toggle-track {
+  position: relative;
+  width: 42px;
+  height: 22px;
+  background: #6c757d;
+  border-radius: 100px;
+  transition: 0.3s;
+  display: block;
+}
+
+/* 優化 toggle-thumb 樣式 */
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: #fff;
+  border-radius: 50%;
+  transition: 0.3s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+/* 錄音檔過濾開關選中狀態 */
+.toggle-input:checked + .toggle-label .toggle-track {
+  background: #28a745;
+  animation: pulse 0.3s ease-out;
+}
+
+/* PDF過濾開關選中狀態 */
+#filter-pdf-toggle:checked + .toggle-label .toggle-track {
+  background: #0275d8;
+}
+
+/* 改變滑塊位置 */
+.toggle-input:checked + .toggle-label .toggle-thumb {
+  left: calc(100% - 2px);
+  transform: translateX(-100%);
+}
+
+/* 優化過濾圖標 */
+.filter-icon {
+  position: absolute;
+  top: 50%;
+  right: -22px;
+  transform: translateY(-50%);
+  color: white;
+  font-size: 0.9rem;
+}
+
+/* 修改刷新按鈕去掉文字 */
 .refresh-btn {
   background-color: rgba(255, 255, 255, 0.15);
   color: white;
   border: none;
-  border-radius: 2rem;
-  padding: 0.3rem 0.8rem;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  font-weight: 500;
-  font-size: 0.9rem;
+  justify-content: center;
   transition: all 0.2s ease;
 }
 
 .refresh-btn:hover {
   background-color: rgba(255, 255, 255, 0.25);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
 }
 
 .refresh-btn i {

@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WearNote - 登入</title>
+    <link rel="icon" href="/static/img/webUI.png" type="image/png">
+    <link rel="apple-touch-icon" href="/static/img/webUI.png">
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <link rel="stylesheet" href="/static/css/style.css">
@@ -54,24 +56,56 @@
                 showMessage(decodeURIComponent(error), 'error');
             }
             
-            // Add click handler to login button
-            googleLoginBtn.addEventListener('click', function(e) {
-                e.preventDefault();
-                showLoading(true);
-                window.location.href = '/api/auth/google';
-            });
+            // Fix login button by ensuring direct click handler
+            if (googleLoginBtn) {
+                googleLoginBtn.onclick = function(e) {
+                    e.preventDefault();
+                    showLoading(true);
+                    window.location.href = '/api/auth/google';
+                };
+            } else {
+                console.error("Login button not found in the DOM");
+            }
             
-            // Check if already authenticated
-            fetch('/api/auth/status')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.authenticated) {
-                        window.location.href = '/';
-                    }
-                })
-                .catch(error => {
-                    console.error('Auth status check error:', error);
-                });
+            // 防止循環跳轉的標記
+            const redirectAttempted = sessionStorage.getItem('login_redirect_attempted');
+            
+            // 檢查是否已嘗試重定向，如果已嘗試則不再檢查驗證狀態
+            if (!redirectAttempted) {
+                // 設置標記
+                sessionStorage.setItem('login_redirect_attempted', 'true');
+                
+                // Check if already authenticated with improved error handling
+                fetch('/api/auth/status')
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`HTTP error ${response.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        if (data.authenticated) {
+                            // 清除標記以便下次重新檢查
+                            sessionStorage.removeItem('login_redirect_attempted');
+                            window.location.href = '/';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Auth status check error:', error);
+                    })
+                    .finally(() => {
+                        // 5 秒後清除標記，允許再次嘗試
+                        setTimeout(() => {
+                            sessionStorage.removeItem('login_redirect_attempted');
+                        }, 5000);
+                    });
+            } else {
+                console.log('已嘗試過重定向，避免無限循環');
+                // 確保 30 秒後重設標記，防止永久鎖定
+                setTimeout(() => {
+                    sessionStorage.removeItem('login_redirect_attempted');
+                }, 30000);
+            }
         });
     </script>
 </body>

@@ -307,6 +307,58 @@ class AudioProcessor:
         # 如果都無法匹配，返回 None
         return None
 
+    def get_file_folder_path(self, file_id):
+        """獲取檔案所在的完整資料夾路徑"""
+        try:
+            if not self.oauth_drive_service:
+                logging.error("未初始化 Drive 服務，無法獲取資料夾路徑")
+                return ""
+            
+            # 獲取檔案元數據以找到父資料夾ID
+            file = self.oauth_drive_service.files().get(
+                fileId=file_id, 
+                fields="parents"
+            ).execute()
+            
+            if not file.get('parents'):
+                return "root"
+            
+            # 構建資料夾路徑
+            path = []
+            parent_id = file['parents'][0]
+            
+            # 向上尋找父資料夾直到根目錄
+            max_depth = 10  # 防止無限循環
+            depth = 0
+            
+            while parent_id and depth < max_depth:
+                try:
+                    parent = self.oauth_drive_service.files().get(
+                        fileId=parent_id,
+                        fields="id,name,parents"
+                    ).execute()
+                    
+                    path.insert(0, parent.get('name', 'unknown'))
+                    
+                    # 檢查是否有父資料夾
+                    if 'parents' in parent and parent['parents']:
+                        parent_id = parent['parents'][0]
+                    else:
+                        break
+                        
+                    depth += 1
+                    
+                except Exception as e:
+                    logging.error(f"獲取父資料夾資訊失敗: {e}")
+                    break
+            
+            # 返回由 / 連接的資料夾路徑
+            return "/".join(path)
+            
+        except Exception as e:
+            logging.error(f"獲取檔案資料夾路徑失敗: {e}")
+            return ""
+
     def try_multiple_gemini_models(self, system_prompt: str, user_content: str, 
                                 models: List[str] = None) -> Any:
         """Try generating content using multiple Gemini models until one succeeds.

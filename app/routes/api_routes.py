@@ -42,13 +42,27 @@ def process_audio_endpoint():
             return jsonify({"success": False, "error": "無效的請求內容"}), 400
 
         file_id = data.get('file_id')
+        
+        # 支援多個與單個附件ID
         attachment_file_id = data.get('attachment_file_id')
+        attachment_file_ids = data.get('attachment_file_ids')
 
         if not file_id:
             return jsonify({"success": False, "error": "缺少 file_id 參數"}), 400
 
-        # 創建非同步工作
-        job_id = processor.process_file_async(file_id, attachment_file_id)
+        # 處理附件ID的不同格式
+        if attachment_file_ids:
+            # 如果提供了多個附件ID
+            if isinstance(attachment_file_ids, list):
+                job_id = processor.process_file_async(file_id, attachment_file_ids=attachment_file_ids)
+            else:
+                return jsonify({"success": False, "error": "attachment_file_ids 參數必須是一個陣列"}), 400
+        elif attachment_file_id:
+            # 向後兼容：如果提供了單個附件ID
+            job_id = processor.process_file_async(file_id, attachment_file_id)
+        else:
+            # 沒有附件
+            job_id = processor.process_file_async(file_id, None)
         
         # 立即返回工作ID
         return jsonify({
@@ -181,6 +195,9 @@ def drive_files():
                 'success': False,
                 'error': '未完成OAuth認證，請先登入'
             }), 401
+            
+        # 檢查是否啟用資料夾過濾
+        filter_enabled = request.args.get('filter', 'disabled') == 'enabled'
         
         # 執行查詢，獲取音頻檔案和PDF檔案
         files = processor.list_drive_files(
@@ -194,16 +211,35 @@ def drive_files():
                 'files': []
             })
         
+        # 獲取檔案資料夾路徑（如果啟用了過濾）
+        folder_paths = {}
+        if filter_enabled:
+            try:
+                # 獲取每個檔案的資料夾路徑
+                for file in files:
+                    file_id = file.get('id')
+                    if file_id:
+                        folder_path = processor.get_file_folder_path(file_id)
+                        folder_paths[file_id] = folder_path
+            except Exception as e:
+                logging.error(f"獲取資料夾路徑失敗: {str(e)}")
+        
         # 整理檔案資訊
         formatted_files = []
         for file in files:
             # 確保檔案具有所有需要的屬性
+            file_id = file.get('id')
             formatted_file = {
-                'id': file.get('id'),
+                'id': file_id,
                 'name': file.get('name', '未命名檔案'),
                 'mimeType': file.get('mimeType', 'application/octet-stream'),
                 'size': file.get('size', 0)
             }
+            
+            # 添加資料夾路徑（如果有）
+            if file_id in folder_paths:
+                formatted_file['folderPath'] = folder_paths[file_id]
+            
             formatted_files.append(formatted_file)
         
         logging.info(f"找到 {len(formatted_files)} 個檔案")
@@ -217,4 +253,4 @@ def drive_files():
         return jsonify({
             'success': False,
             'error': f'獲取檔案列表失敗: {str(e)}'
-        }), 500 
+        }), 500

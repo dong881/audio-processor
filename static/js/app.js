@@ -4,6 +4,13 @@ let googleAuthInitialized = false;
 let activeJobsTimer = null;
 let currentJobId = null;
 let jobStatusTimer = null;
+let redirectBlocked = false; // 防止循環跳轉的標記
+
+// Add global variables for folder filtering
+let recordingsFilterEnabled = false;
+let pdfFilterEnabled = false;
+const RECORDINGS_FOLDER = 'WearNote_Recordings';
+const DOCUMENTS_FOLDER = 'WearNote_Recordings/Documents';
 
 // DOM 元素快取
 const elements = {
@@ -16,7 +23,11 @@ const elements = {
     resultContainer: document.getElementById('result-container'),
     authSection: document.getElementById('auth-section'),
     processingSection: document.getElementById('processing-section'),
-    loginButton: document.getElementById('login-button'),
+    // 支援多個登入按鈕元素 (同時支援 login-button 和 login-btn)
+    loginButtons: [
+        document.getElementById('login-button'),
+        document.getElementById('login-btn')
+    ].filter(Boolean), // 過濾掉不存在的元素
     logoutButton: document.getElementById('logout-button'),
 
     // 操作按鈕
@@ -49,24 +60,31 @@ function initApp() {
         .then(isAuthenticated => {
             if (isAuthenticated) {
                 showAuthenticatedUI();
+                // 只有在已認證的情況下才載入檔案
                 loadDriveFiles();
                 startActiveJobsPolling();
             } else {
+                // 未認證用戶將被重新導向到登入頁面
                 showUnauthenticatedUI();
+                if (!redirectBlocked && !window.location.pathname.includes('/login')) {
+                    redirectBlocked = true;
+                    window.location.href = '/login';
+                }
             }
         })
         .catch(error => {
             console.error('認證檢查失敗:', error);
             showUnauthenticatedUI();
-            showError('檢查認證狀態時發生錯誤。請稍後再試。');
         });
 }
 
 // 設置事件監聽器
 function setupEventListeners() {
     // 登入/登出按鈕
-    if (elements.loginButton) {
-        elements.loginButton.addEventListener('click', handleLogin);
+    if (elements.loginButtons.length > 0) {
+        elements.loginButtons.forEach(button => {
+            button.addEventListener('click', handleLogin);
+        });
     }
     
     if (elements.logoutButton) {
@@ -98,6 +116,83 @@ function setupEventListeners() {
     if (elements.showActiveJobsBtn) {
         elements.showActiveJobsBtn.addEventListener('click', toggleActiveJobs);
     }
+
+    // 錄音資料夾過濾切換開關
+    const recordingsFilterToggle = document.getElementById('filter-recordings-toggle');
+    if (recordingsFilterToggle) {
+        // 載入保存的偏好設置
+        const savedPreference = localStorage.getItem('filter-recordings-enabled');
+        recordingsFilterEnabled = savedPreference === 'true';
+        recordingsFilterToggle.checked = recordingsFilterEnabled;
+        
+        // 更新視覺效果
+        if (recordingsFilterEnabled) {
+            const toggleTrack = recordingsFilterToggle.nextElementSibling.querySelector('.toggle-track');
+            if (toggleTrack) toggleTrack.classList.add('active');
+        }
+        
+        recordingsFilterToggle.addEventListener('change', function(e) {
+            recordingsFilterEnabled = e.target.checked;
+            
+            // 提供視覺反饋
+            const toggleLabel = this.nextElementSibling;
+            if (toggleLabel) {
+                toggleLabel.classList.add('pulse');
+                setTimeout(() => toggleLabel.classList.remove('pulse'), 300);
+            }
+            
+            // 保存偏好設置
+            localStorage.setItem('filter-recordings-enabled', recordingsFilterEnabled);
+            
+            // 使用更新的過濾設置重新載入檔案
+            loadDriveFiles();
+        });
+    }
+    
+    // PDF資料夾過濾切換開關
+    const pdfFilterToggle = document.getElementById('filter-pdf-toggle');
+    if (pdfFilterToggle) {
+        // 載入保存的偏好設置
+        const savedPreference = localStorage.getItem('filter-pdf-enabled');
+        pdfFilterEnabled = savedPreference === 'true';
+        pdfFilterToggle.checked = pdfFilterEnabled;
+        
+        // 更新視覺效果
+        if (pdfFilterEnabled) {
+            const toggleTrack = pdfFilterToggle.nextElementSibling.querySelector('.toggle-track');
+            if (toggleTrack) toggleTrack.classList.add('active');
+        }
+        
+        pdfFilterToggle.addEventListener('change', function(e) {
+            pdfFilterEnabled = e.target.checked;
+            
+            // 提供視覺反饋
+            const toggleLabel = this.nextElementSibling;
+            if (toggleLabel) {
+                toggleLabel.classList.add('pulse');
+                setTimeout(() => toggleLabel.classList.remove('pulse'), 300);
+            }
+            
+            // 保存偏好設置
+            localStorage.setItem('filter-pdf-enabled', pdfFilterEnabled);
+            
+            // 使用更新的過濾設置重新載入檔案
+            loadDriveFiles();
+        });
+    }
+
+    // Initialize tooltips with updated options
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    if (typeof bootstrap !== 'undefined') {
+        tooltipTriggerList.forEach(function(tooltipTriggerEl) {
+            new bootstrap.Tooltip(tooltipTriggerEl, {
+                animation: true,
+                trigger: 'hover focus'
+            });
+        });
+    } else {
+        console.warn('Bootstrap JavaScript is not loaded. Tooltips will not work.');
+    }
 }
 
 // ===== 認證相關函數 =====
@@ -105,11 +200,63 @@ function setupEventListeners() {
 // 檢查用戶認證狀態
 async function checkAuthStatus() {
     try {
+        // 使用正確的 API 路徑
         const response = await fetch(`${API_BASE_URL}/api/auth/status`);
+        
+        if (!response.ok) {
+            console.error(`認證狀態檢查失敗，錯誤碼: ${response.status}`);
+            return false;
+        }
+        
         const data = await response.json();
-        return data.authenticated === true;
+        
+        if (data.authenticated) {
+            // 顯示已驗證的UI
+            showAuthenticatedUI(data.user);
+            
+            // 如果用戶資訊未知但已認證，則嘗試刷新用戶資訊
+            if (data.user && (data.user.id === "unknown" || !data.user.email)) {
+                console.log("已認證但用戶資訊不完整，嘗試刷新用戶資訊...");
+                await refreshUserInfo();
+                return true;
+            }
+            
+            return true;
+        } else {
+            // 顯示未驗證的UI
+            showUnauthenticatedUI();
+            return false;
+        }
     } catch (error) {
-        console.error('檢查認證狀態失敗:', error);
+        console.error('檢查認證狀態時出錯:', error);
+        showUnauthenticatedUI();
+        return false;
+    }
+}
+
+// 新增函數：刷新用戶資訊
+async function refreshUserInfo() {
+    try {
+        // 修正 API 路徑，確保使用正確的路徑
+        const response = await fetch(`${API_BASE_URL}/api/auth/userinfo`);
+        
+        if (!response.ok) {
+            console.error(`刷新用戶資訊失敗，錯誤碼: ${response.status}`);
+            return false;
+        }
+        
+        const userData = await response.json();
+        
+        if (userData.success && userData.user) {
+            console.log("成功刷新用戶資訊:", userData.user);
+            showAuthenticatedUI(userData.user);
+            return true;
+        } else {
+            console.warn("刷新用戶資訊失敗", userData.error || "未知錯誤");
+            return false;
+        }
+    } catch (error) {
+        console.error('刷新用戶資訊時出錯:', error);
         return false;
     }
 }
@@ -132,26 +279,13 @@ async function handleLogout() {
 
 // ===== UI 顯示相關函數 =====
 
-// 顯示已認證用戶界面
-function showAuthenticatedUI() {
-    if (elements.authSection) elements.authSection.classList.add('d-none');
-    if (elements.processingSection) elements.processingSection.classList.remove('d-none');
-    if (elements.loginButton) elements.loginButton.classList.add('d-none');
-    if (elements.logoutButton) elements.logoutButton.classList.remove('d-none');
-}
-
-// 顯示未認證用戶界面
-function showUnauthenticatedUI() {
-    if (elements.authSection) elements.authSection.classList.remove('d-none');
-    if (elements.processingSection) elements.processingSection.classList.add('d-none');
-    if (elements.loginButton) elements.loginButton.classList.remove('d-none');
-    if (elements.logoutButton) elements.logoutButton.classList.add('d-none');
-}
-
-// 顯示錯誤訊息
+// 顯示錯誤訊息 - 持續顯示直到被替換
 function showError(message) {
+    // 先移除所有現有的提示訊息
+    removeAllAlerts();
+    
     const errorAlert = document.createElement('div');
-    errorAlert.className = 'alert alert-danger alert-dismissible fade show';
+    errorAlert.className = 'alert alert-danger alert-dismissible fade show persistent-alert';
     errorAlert.innerHTML = `
         <i class="bi bi-exclamation-triangle-fill me-2"></i>
         ${message}
@@ -161,17 +295,16 @@ function showError(message) {
     // 添加到頁面頂部
     document.body.insertBefore(errorAlert, document.body.firstChild);
     
-    // 5秒後自動消失
-    setTimeout(() => {
-        errorAlert.classList.remove('show');
-        setTimeout(() => errorAlert.remove(), 300);
-    }, 5000);
+    // 不再自動消失
 }
 
-// 顯示成功訊息
+// 顯示成功訊息 - 持續顯示直到被替換
 function showSuccess(message) {
+    // 先移除所有現有的提示訊息
+    removeAllAlerts();
+    
     const successAlert = document.createElement('div');
-    successAlert.className = 'alert alert-success alert-dismissible fade show';
+    successAlert.className = 'alert alert-success alert-dismissible fade show persistent-alert';
     successAlert.innerHTML = `
         <i class="bi bi-check-circle-fill me-2"></i>
         ${message}
@@ -181,18 +314,64 @@ function showSuccess(message) {
     // 添加到頁面頂部
     document.body.insertBefore(successAlert, document.body.firstChild);
     
-    // 5秒後自動消失
+    // 不再自動消失
+}
+
+// 移除所有提示訊息
+function removeAllAlerts() {
+    document.querySelectorAll('.persistent-alert').forEach(alert => {
+        alert.remove();
+    });
+}
+
+// 顯示已認證用戶界面
+function showAuthenticatedUI() {
+    if (elements.authSection) elements.authSection.classList.add('d-none');
+    if (elements.processingSection) elements.processingSection.classList.remove('d-none');
+    if (elements.loginButtons.length > 0) {
+        elements.loginButtons.forEach(button => {
+            button.classList.add('d-none');
+        });
+    }
+    if (elements.logoutButton) elements.logoutButton.classList.remove('d-none');
+}
+
+// 顯示未認證用戶界面
+function showUnauthenticatedUI() {
+    // 自動跳轉到登入頁面，而不是嘗試載入未認證的內容
+    console.log('用戶未認證，正在跳轉到登入頁面...');
+    
+    // 短暫延遲跳轉，以便用戶看到提示
     setTimeout(() => {
-        successAlert.classList.remove('show');
-        setTimeout(() => successAlert.remove(), 300);
-    }, 5000);
+        window.location.href = '/login';
+    }, 100);
+    
+    // 以下程式碼在跳轉前短暫執行
+    if (elements.authSection) elements.authSection.classList.remove('d-none');
+    if (elements.processingSection) elements.processingSection.classList.add('d-none');
+    if (elements.loginButtons.length > 0) {
+        elements.loginButtons.forEach(button => {
+            button.classList.remove('d-none');
+        });
+    }
+    if (elements.logoutButton) elements.logoutButton.classList.add('d-none');
 }
 
 // ===== Google Drive 檔案操作 =====
 
 // 載入 Google Drive 檔案
 async function loadDriveFiles() {
+    const fileList = document.getElementById('file-list');
+    if (!fileList) return;
+    
     try {
+        // 檢查是否已認證，未認證則不繼續載入
+        const authStatus = await checkAuthStatus();
+        if (!authStatus) {
+            showUnauthenticatedUI();
+            return;
+        }
+        
         if (elements.fileList) {
             elements.fileList.innerHTML = `
                 <div class="text-center">
@@ -209,7 +388,13 @@ async function loadDriveFiles() {
                 </div>`;
         }
         
-        const response = await fetch(`${API_BASE_URL}/drive/files`);
+        // 使用獨立的過濾器參數，確保後端能正確處理
+        const queryParams = new URLSearchParams({
+            recordingsFilter: recordingsFilterEnabled ? 'enabled' : 'disabled',
+            pdfFilter: pdfFilterEnabled ? 'enabled' : 'disabled'
+        });
+        
+        const response = await fetch(`${API_BASE_URL}/drive/files?${queryParams.toString()}`);
         
         if (!response.ok) {
             throw new Error(`HTTP error ${response.status}`);
@@ -217,14 +402,39 @@ async function loadDriveFiles() {
         
         const data = await response.json();
         
+        // 分離音訊檔案和PDF檔案
+        let audioFiles = data.files.filter(file => isAudioFile(file.mimeType));
+        let pdfFiles = data.files.filter(file => file.mimeType === 'application/pdf');
+        
+        console.log("過濾前總音訊檔案:", audioFiles.length);
+        console.log("過濾前總PDF檔案:", pdfFiles.length);
+        
+        // 根據切換狀態進行資料夾過濾
+        if (recordingsFilterEnabled) {
+            // 確保 folderPath 存在並包含 RECORDINGS_FOLDER
+            audioFiles = audioFiles.filter(file => 
+                file.folderPath && file.folderPath.toLowerCase().includes(RECORDINGS_FOLDER.toLowerCase())
+            );
+            console.log(`過濾後 ${RECORDINGS_FOLDER} 資料夾的音訊檔案:`, audioFiles.length);
+        }
+        
+        if (pdfFilterEnabled) {
+            // 確保 folderPath 存在並包含 DOCUMENTS_FOLDER
+            pdfFiles = pdfFiles.filter(file => 
+                file.folderPath && file.folderPath.toLowerCase().includes(DOCUMENTS_FOLDER.toLowerCase())
+            );
+            console.log(`過濾後 ${DOCUMENTS_FOLDER} 資料夾的PDF檔案:`, pdfFiles.length);
+        }
+        
         // 填充音訊文件列表
         if (elements.fileList) {
-            const audioFiles = data.files.filter(file => isAudioFile(file.mimeType));
             if (audioFiles.length === 0) {
                 elements.fileList.innerHTML = `
                     <div class="alert alert-info">
                         <i class="bi bi-info-circle-fill me-2" style="font-size: 1.5rem;"></i>
-                        未找到音訊檔案。請上傳音訊檔案到您的 Google Drive.
+                        ${recordingsFilterEnabled ? 
+                            `未在 ${RECORDINGS_FOLDER} 資料夾中找到音訊檔案。請上傳音訊檔案到此資料夾。` : 
+                            '未找到音訊檔案。請上傳音訊檔案到您的 Google Drive.'}
                     </div>`;
             } else {
                 elements.fileList.innerHTML = '';
@@ -262,12 +472,13 @@ async function loadDriveFiles() {
         
         // 填充附件文件列表
         if (elements.attachmentList) {
-            const pdfFiles = data.files.filter(file => file.mimeType === 'application/pdf');
             if (pdfFiles.length === 0) {
                 elements.attachmentList.innerHTML = `
                     <div class="alert alert-info">
                         <i class="bi bi-info-circle-fill me-2" style="font-size: 1.5rem;"></i>
-                        未找到 PDF 檔案。附件是選用的。
+                        ${pdfFilterEnabled ? 
+                            `未在 ${DOCUMENTS_FOLDER} 資料夾中找到 PDF 檔案。附件是選用的。` : 
+                            '未找到 PDF 檔案。附件是選用的。'}
                     </div>`;
             } else {
                 elements.attachmentList.innerHTML = '';
@@ -379,27 +590,37 @@ async function loadDriveFiles() {
 
 // 處理選擇的檔案
 async function processSelectedFile() {
-    // 獲取選擇的音訊檔案
-    const selectedAudioElement = document.querySelector('.file-option input[type="radio"]:checked');
-    if (!selectedAudioElement) {
-        showError('請選擇一個音訊檔案進行處理');
+    // 獲取選中的音訊檔案
+    const selectedFile = document.querySelector('input[name="audioFile"]:checked');
+    if (!selectedFile) {
+        showError('請先選擇一個音訊檔案');
         return;
     }
     
-    const fileId = selectedAudioElement.value;
-    const fileName = selectedAudioElement.dataset.filename;
+    // 獲取選中的所有附件檔案（支援多個PDF選擇）
+    const attachmentFileIds = [];
+    const attachmentFileNames = [];
     
-    // 獲取選擇的附件檔案（支援多選）
-    const selectedAttachmentElements = document.querySelectorAll('.attachment-option input[type="checkbox"]:checked:not([data-none="true"])');
-    const attachmentFileIds = Array.from(selectedAttachmentElements).map(el => el.value);
-    const attachmentFileNames = Array.from(selectedAttachmentElements).map(el => el.dataset.filename);
+    // 檢查是否有選擇"無附件"選項
+    const noneOptionSelected = document.querySelector('#attachment-none:checked');
+    
+    // 如果沒有選"無附件"，則收集所有選中的PDF附件
+    if (!noneOptionSelected) {
+        document.querySelectorAll('.attachment-option:not(.none-option) input[type="checkbox"]:checked').forEach(checkbox => {
+            attachmentFileIds.push(checkbox.value);
+            attachmentFileNames.push(checkbox.getAttribute('data-filename'));
+        });
+    }
+    
+    const fileId = selectedFile.value;
+    const fileName = selectedFile.getAttribute('data-filename');
     
     // 禁用按鈕，顯示處理進度
     elements.processBtn.disabled = true;
     elements.processBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 處理中...';
     
     try {
-        // 提交處理請求
+        // 提交處理請求（修改為支援多個附件ID）
         const response = await fetch(`${API_BASE_URL}/process`, {
             method: 'POST',
             headers: {
