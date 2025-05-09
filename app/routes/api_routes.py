@@ -36,33 +36,26 @@ def health_check():
 def process_audio_endpoint():
     """非同步處理音檔的 API 端點，立即返回工作 ID"""
     try:
-        data = request.json
+        data = request.get_json()
 
         if not data:
             return jsonify({"success": False, "error": "無效的請求內容"}), 400
 
         file_id = data.get('file_id')
         
-        # 支援多個與單個附件ID
-        attachment_file_id = data.get('attachment_file_id')
-        attachment_file_ids = data.get('attachment_file_ids')
+        # attachment_file_id 支援單一 PDF
+        attachment_file_id = None
+        if 'attachment_file_id' in data:
+            attachment_file_id = data['attachment_file_id']
+        elif 'attachment_file_ids' in data and isinstance(data['attachment_file_ids'], list) and data['attachment_file_ids']:
+            # 只取第一個 PDF
+            attachment_file_id = data['attachment_file_ids'][0]
 
         if not file_id:
             return jsonify({"success": False, "error": "缺少 file_id 參數"}), 400
 
-        # 處理附件ID的不同格式
-        if attachment_file_ids:
-            # 如果提供了多個附件ID
-            if isinstance(attachment_file_ids, list):
-                job_id = processor.process_file_async(file_id, attachment_file_ids=attachment_file_ids)
-            else:
-                return jsonify({"success": False, "error": "attachment_file_ids 參數必須是一個陣列"}), 400
-        elif attachment_file_id:
-            # 向後兼容：如果提供了單個附件ID
-            job_id = processor.process_file_async(file_id, attachment_file_id)
-        else:
-            # 沒有附件
-            job_id = processor.process_file_async(file_id, None)
+        # 提交工作
+        job_id = processor.process_file_async(file_id, attachment_file_id=attachment_file_id)
         
         # 立即返回工作ID
         return jsonify({
@@ -181,76 +174,49 @@ def get_active_jobs_endpoint():
 @api_bp.route('/drive/files')
 def drive_files():
     """獲取Google Drive檔案列表"""
-    # 檢查認證
     if not session.get('authenticated', False):
-        return jsonify({
-            'success': False,
-            'error': 'Not authenticated'
-        }), 401
-    
+        return jsonify({'success': False, 'error': 'Not authenticated'}), 401
+
     try:
-        # 使用processor的list_drive_files方法獲取檔案列表
         if processor.oauth_drive_service is None:
-            return jsonify({
-                'success': False,
-                'error': '未完成OAuth認證，請先登入'
-            }), 401
-            
-        # 檢查是否啟用資料夾過濾
-        filter_enabled = request.args.get('filter', 'disabled') == 'enabled'
-        
-        # 執行查詢，獲取音頻檔案和PDF檔案
-        files = processor.list_drive_files(
-            query="trashed = false and (mimeType contains 'audio/' or mimeType = 'application/pdf')"
-        )
-        
-        if not files:
-            logging.info("未找到檔案")
-            return jsonify({
-                'success': True,
-                'files': []
-            })
-        
-        # 獲取檔案資料夾路徑（如果啟用了過濾）
-        folder_paths = {}
-        if filter_enabled:
-            try:
-                # 獲取每個檔案的資料夾路徑
-                for file in files:
-                    file_id = file.get('id')
-                    if file_id:
-                        folder_path = processor.get_file_folder_path(file_id)
-                        folder_paths[file_id] = folder_path
-            except Exception as e:
-                logging.error(f"獲取資料夾路徑失敗: {str(e)}")
-        
-        # 整理檔案資訊
+            return jsonify({'success': False, 'error': '未完成OAuth認證，請先登入'}), 401
+
+        # 取得篩選參數
+        recordings_folder_name = request.args.get('recordingsFolderName')
+        pdf_folder_name = request.args.get('pdfFolderName')
+        recordings_filter = request.args.get('recordingsFilter', 'disabled') == 'enabled'
+        pdf_filter = request.args.get('pdfFilter', 'disabled') == 'enabled'
+
+        # 查找資料夾ID
+        folder_id = None
+        file_type_query = ""
+        if recordings_filter and recordings_folder_name:
+            folder_id = processor.find_folder_id_by_path(recordings_folder_name)
+            file_type_query = "mimeType contains 'audio/'"
+        elif pdf_filter and pdf_folder_name:
+            folder_id = processor.find_folder_id_by_path(pdf_folder_name)
+            file_type_query = "mimeType = 'application/pdf'"
+
+        # 組合查詢
+        if folder_id:
+            query = f"trashed = false and '{folder_id}' in parents"
+            if file_type_query:
+                query += f" and ({file_type_query})"
+        else:
+            query = "trashed = false and (mimeType contains 'audio/' or mimeType = 'application/pdf')"
+
+        files = processor.list_drive_files(query=query)
         formatted_files = []
         for file in files:
-            # 確保檔案具有所有需要的屬性
-            file_id = file.get('id')
-            formatted_file = {
-                'id': file_id,
+            formatted_files.append({
+                'id': file.get('id'),
                 'name': file.get('name', '未命名檔案'),
                 'mimeType': file.get('mimeType', 'application/octet-stream'),
-                'size': file.get('size', 0)
-            }
-            
-            # 添加資料夾路徑（如果有）
-            if file_id in folder_paths:
-                formatted_file['folderPath'] = folder_paths[file_id]
-            
-            formatted_files.append(formatted_file)
-        
-        logging.info(f"找到 {len(formatted_files)} 個檔案")
-        return jsonify({
-            'success': True,
-            'files': formatted_files
-        })
-        
+                'size': file.get('size', 0),
+                'parents': file.get('parents', [])
+            })
+        return jsonify({'success': True, 'files': formatted_files})
+
     except Exception as e:
         logging.error(f"獲取 Google Drive 檔案列表時發生錯誤: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f'獲取檔案列表失敗: {str(e)}'
-        }), 500
+        return jsonify({'success': False, 'error': f'獲取檔案列表失敗: {str(e)}'}), 500

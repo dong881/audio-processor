@@ -189,26 +189,47 @@ class AudioProcessor:
     def list_drive_files(self, query="trashed = false and (mimeType contains 'audio/' or mimeType = 'application/pdf')"):
         """列出Google Drive檔案 (使用OAuth認證)"""
         logging.info(f"🔄 使用OAuth憑證列出Google Drive檔案")
-        
+
         if not self.oauth_drive_service:
             logging.error("❌ OAuth Drive服務未初始化，無法取得檔案列表")
             return []
-            
+
         try:
-            # 執行查詢，取得檔案 ID、名稱、MIME 類型和大小
+            # 執行查詢，取得檔案 ID、名稱、MIME 類型、大小與父資料夾
             results = self.oauth_drive_service.files().list(
                 q=query,
                 spaces='drive',
-                fields="files(id, name, mimeType, size)",
+                fields="files(id, name, mimeType, size, parents)",
                 orderBy="modifiedTime desc"
             ).execute()
-            
+
             files = results.get('files', [])
             logging.info(f"✅ 已成功獲取 {len(files)} 個檔案")
             return files
         except Exception as e:
             logging.error(f"❌ 列出Google Drive檔案失敗: {str(e)}")
             return []
+
+    def find_folder_id_by_path(self, folder_path: str) -> Optional[str]:
+        """
+        根據多層資料夾名稱（如 'WearNote_Recordings/Documents'）遞迴查找最終資料夾ID。
+        """
+        if not self.oauth_drive_service:
+            return None
+        names = folder_path.strip('/').split('/')
+        parent_id = 'root'
+        for name in names:
+            results = self.oauth_drive_service.files().list(
+                q=f"trashed = false and mimeType = 'application/vnd.google-apps.folder' and name = '{name}' and '{parent_id}' in parents",
+                spaces='drive',
+                fields="files(id, name)",
+                pageSize=10
+            ).execute()
+            folders = results.get('files', [])
+            if not folders:
+                return None
+            parent_id = folders[0]['id']
+        return parent_id
 
     def download_and_extract_text(self, file_id: str) -> Tuple[Optional[str], Optional[str]]:
         """下載並提取 PDF 文字內容 (使用服務帳號)"""

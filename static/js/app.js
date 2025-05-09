@@ -365,6 +365,17 @@ function showUnauthenticatedUI() {
 
 // ===== Google Drive 檔案操作 =====
 
+// 取得指定名稱的資料夾ID（假設已經有一份所有資料夾的列表，或需先查詢一次）
+async function getFolderIdByName(folderName) {
+    const response = await fetch(`${API_BASE_URL}/drive/files?folderOnly=true`);
+    const data = await response.json();
+    if (data.success) {
+        const folder = data.files.find(f => f.name === folderName && f.mimeType === 'application/vnd.google-apps.folder');
+        return folder ? folder.id : null;
+    }
+    return null;
+}
+
 // 載入 Google Drive 檔案
 async function loadDriveFiles() {
     const fileList = document.getElementById('file-list');
@@ -393,17 +404,27 @@ async function loadDriveFiles() {
                     <p class="mt-3">正在載入您的附件...</p>
                 </div>`;
         }
-        
-        // 使用獨立的過濾器參數，確保後端能正確處理
+
         const queryParams = new URLSearchParams({
             recordingsFilter: recordingsFilterEnabled ? 'enabled' : 'disabled',
             pdfFilter: pdfFilterEnabled ? 'enabled' : 'disabled'
         });
+        if (recordingsFilterEnabled) {
+            queryParams.append('recordingsFolderName', RECORDINGS_FOLDER);
+        }
+        if (pdfFilterEnabled) {
+            queryParams.append('pdfFolderName', DOCUMENTS_FOLDER);
+        }
         
         const response = await fetch(`${API_BASE_URL}/drive/files?${queryParams.toString()}`);
         
         if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+            if (response.status === 401) {
+                // For 401, throw an error that specifically indicates this,
+                // so the catch block can identify it.
+                throw new Error(`401 Unauthorized: Failed to load Drive files. Session may be invalid.`);
+            }
+            throw new Error(`HTTP error ${response.status}: Failed to load Drive files.`);
         }
         
         const data = await response.json();
@@ -414,23 +435,6 @@ async function loadDriveFiles() {
         
         console.log("過濾前總音訊檔案:", audioFiles.length);
         console.log("過濾前總PDF檔案:", pdfFiles.length);
-        
-        // 根據切換狀態進行資料夾過濾
-        if (recordingsFilterEnabled) {
-            // 確保 folderPath 存在並包含 RECORDINGS_FOLDER
-            audioFiles = audioFiles.filter(file => 
-                file.folderPath && file.folderPath.toLowerCase().includes(RECORDINGS_FOLDER.toLowerCase())
-            );
-            console.log(`過濾後 ${RECORDINGS_FOLDER} 資料夾的音訊檔案:`, audioFiles.length);
-        }
-        
-        if (pdfFilterEnabled) {
-            // 確保 folderPath 存在並包含 DOCUMENTS_FOLDER
-            pdfFiles = pdfFiles.filter(file => 
-                file.folderPath && file.folderPath.toLowerCase().includes(DOCUMENTS_FOLDER.toLowerCase())
-            );
-            console.log(`過濾後 ${DOCUMENTS_FOLDER} 資料夾的PDF檔案:`, pdfFiles.length);
-        }
         
         // 填充音訊文件列表
         if (elements.fileList) {
@@ -577,18 +581,27 @@ async function loadDriveFiles() {
         }
     } catch (error) {
         console.error('載入檔案失敗:', error);
+        
+        let displayErrorMessage = error.message || '載入檔案失敗。請重試。';
+
+        if (error.message && error.message.startsWith('401 Unauthorized')) {
+            // Specific handling for the 401 error from this fetch
+            displayErrorMessage = '載入 Google Drive 檔案失敗，您的登入可能已失效。請嘗試重新登入。';
+            showUnauthenticatedUI(); // Revert to unauthenticated UI
+        }
+
         if (elements.fileList) {
             elements.fileList.innerHTML = `
                 <div class="alert alert-danger">
                     <i class="bi bi-exclamation-triangle-fill me-2" style="font-size: 1.5rem;"></i>
-                    載入檔案失敗。請重試。
+                    ${displayErrorMessage}
                 </div>`;
         }
         if (elements.attachmentList) {
             elements.attachmentList.innerHTML = `
                 <div class="alert alert-danger">
                     <i class="bi bi-exclamation-triangle-fill me-2" style="font-size: 1.5rem;"></i>
-                    載入檔案失敗。請重試。
+                    ${displayErrorMessage}
                 </div>`;
         }
     }
@@ -603,19 +616,15 @@ async function processSelectedFile() {
         return;
     }
     
-    // 獲取選中的所有附件檔案（支援多個PDF選擇）
-    const attachmentFileIds = [];
-    const attachmentFileNames = [];
-    
-    // 檢查是否有選擇"無附件"選項
-    const noneOptionSelected = document.querySelector('#attachment-none:checked');
-    
-    // 如果沒有選"無附件"，則收集所有選中的PDF附件
-    if (!noneOptionSelected) {
-        document.querySelectorAll('.attachment-option:not(.none-option) input[type="checkbox"]:checked').forEach(checkbox => {
-            attachmentFileIds.push(checkbox.value);
-            attachmentFileNames.push(checkbox.getAttribute('data-filename'));
-        });
+    // 獲取選中的附件檔案（只支援單一PDF選擇）
+    let attachmentFileId = null;
+    let attachmentFileName = null;
+    if (elements.attachmentList) {
+        const checked = document.querySelector('.attachment-option:not(.none-option) input[type="checkbox"]:checked');
+        if (checked) {
+            attachmentFileId = checked.value;
+            attachmentFileName = checked.getAttribute('data-filename');
+        }
     }
     
     const fileId = selectedFile.value;
@@ -626,7 +635,7 @@ async function processSelectedFile() {
     elements.processBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 處理中...';
     
     try {
-        // 提交處理請求（修改為支援多個附件ID）
+        // 提交處理請求（只傳單一 attachment_file_id）
         const response = await fetch(`${API_BASE_URL}/process`, {
             method: 'POST',
             headers: {
@@ -634,7 +643,7 @@ async function processSelectedFile() {
             },
             body: JSON.stringify({
                 file_id: fileId,
-                attachment_file_ids: attachmentFileIds.length > 0 ? attachmentFileIds : null
+                ...(attachmentFileId ? { attachment_file_id: attachmentFileId } : {})
             })
         });
         
@@ -651,8 +660,7 @@ async function processSelectedFile() {
             
             // 設置文件名稱顯示
             const fileInfo = `處理檔案: ${fileName}`;
-            const attachmentInfo = attachmentFileNames.length > 0 ? 
-                ` (附件: ${attachmentFileNames.join(', ')})` : '';
+            const attachmentInfo = attachmentFileName ? ` (附件: ${attachmentFileName})` : '';
             elements.processingStatus.innerHTML = `<i class="bi bi-cpu me-2"></i>${fileInfo}${attachmentInfo}`;
             
             // 啟動狀態檢查
