@@ -64,12 +64,8 @@ function initApp() {
                 loadDriveFiles();
                 startActiveJobsPolling();
             } else {
-                // 未認證用戶將被重新導向到登入頁面
+                // 未認證用戶將顯示未認證的UI
                 showUnauthenticatedUI();
-                if (!redirectBlocked && !window.location.pathname.includes('/login')) {
-                    redirectBlocked = true;
-                    window.location.href = '/login';
-                }
             }
         })
         .catch(error => {
@@ -225,31 +221,25 @@ async function checkAuthStatus() {
         
         if (!response.ok) {
             console.error(`認證狀態檢查失敗，錯誤碼: ${response.status}`);
+            // Do not call showUnauthenticatedUI here directly, let initApp handle it based on return value
             return false;
         }
         
         const data = await response.json();
         
         if (data.authenticated) {
-            // 顯示已驗證的UI
-            showAuthenticatedUI(data.user);
-            
             // 如果用戶資訊未知但已認證，則嘗試刷新用戶資訊
             if (data.user && (data.user.id === "unknown" || !data.user.email)) {
                 console.log("已認證但用戶資訊不完整，嘗試刷新用戶資訊...");
                 await refreshUserInfo();
-                return true;
             }
             
             return true;
         } else {
-            // 顯示未驗證的UI
-            showUnauthenticatedUI();
             return false;
         }
     } catch (error) {
         console.error('檢查認證狀態時出錯:', error);
-        showUnauthenticatedUI();
         return false;
     }
 }
@@ -358,15 +348,11 @@ function showAuthenticatedUI() {
 
 // 顯示未認證用戶界面
 function showUnauthenticatedUI() {
-    // 自動跳轉到登入頁面，而不是嘗試載入未認證的內容
-    console.log('用戶未認證，正在跳轉到登入頁面...');
+    // This function will now only update the UI.
+    // Redirection to /login will be handled by auth.js
+    console.log('app.js: User not authenticated. UI updated for unauthenticated state. Redirection handled by auth.js if necessary.');
     
-    // 短暫延遲跳轉，以便用戶看到提示
-    setTimeout(() => {
-        window.location.href = '/login';
-    }, 100);
-    
-    // 以下程式碼在跳轉前短暫執行
+    // UI updates for unauthenticated state
     if (elements.authSection) elements.authSection.classList.remove('d-none');
     if (elements.processingSection) elements.processingSection.classList.add('d-none');
     if (elements.loginButtons.length > 0) {

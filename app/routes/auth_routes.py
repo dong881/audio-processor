@@ -129,30 +129,25 @@ def auth_google_login():
 
 @auth_bp.route('/api/auth/callback')
 def auth_callback():
-    """處理OAuth回調"""
     from app.services.audio_processor import AudioProcessor
-    # 取得全域的 processor 實例
     from main import processor
     
     code = request.args.get('code')
     state = request.args.get('state')
     error = request.args.get('error')
     
-    logging.info(f"🔄 收到 OAuth 回調: code={'有值' if code else '無值'}, state={'有值' if state else '無值'}")
+    logging.info(f"🔄 收到 OAuth 回調: code={'有值' if code else '無值'}, state={'有值' if state else '無值'}, error={error}")
     
-    # 檢查是否有錯誤
     if error:
         error_msg = f"Google OAuth 返回錯誤: {error}"
         logging.error(f"❌ OAuth 回調失敗: {error_msg}")
         return redirect(f'/login?error={error_msg}')
     
-    # 檢查是否收到授權碼和狀態
     if not code or not state:
         error_msg = '缺少授權碼或狀態參數'
         logging.error(f"❌ OAuth 回調失敗: {error_msg}")
         return redirect(f'/login?error={error_msg}')
     
-    # 檢查狀態是否匹配
     session_state = session.get('flow_state')
     if state != session_state:
         error_msg = f'狀態參數不匹配 (收到: {state}, 期望: {session_state})'
@@ -160,14 +155,11 @@ def auth_callback():
         return redirect(f'/login?error={error_msg}')
     
     try:
-        # 重新建立 OAuth 流程
         client_secrets_file = os.getenv("GOOGLE_CLIENT_SECRET_PATH", 
-                             os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                             "credentials/client_secret.json"))
+                                     os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                                     "credentials/client_secret.json"))
                                            
-        # 確認 client_secret.json 文件存在
         if not os.path.exists(client_secrets_file):
-            # 嘗試替代路徑
             alt_path = "/app/credentials/client_secret.json"
             if os.path.exists(alt_path):
                 client_secrets_file = alt_path
@@ -177,60 +169,102 @@ def auth_callback():
                 logging.error(f"❌ OAuth 回調失敗: {error_msg}")
                 return redirect(f'/login?error={error_msg}')
         
-        # 使用之前保存的重定向URI
         redirect_uri = session.get('redirect_uri')
         if not redirect_uri:
-            # 如果沒有保存的URI，使用與auth_google相同的邏輯重建
             redirect_uri = request.url_root.rstrip('/') + '/api/auth/callback'
-            # 檢查是否需要替換內部地址
             if 'localhost' in redirect_uri or '0.0.0.0' in redirect_uri or '127.0.0.1' in redirect_uri:
-                # 嘗試獲取環境變數中設定的外部URL
                 external_url = os.getenv("EXTERNAL_URL")
                 if external_url:
                     redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
                 else:
-                    # 如果正在使用Docker內部地址，則使用配置的外部地址
                     redirect_uri = "http://localhost:5000/api/auth/callback"
         
         logging.info(f"🔄 重建 OAuth 流程，使用重定向 URI: {redirect_uri}")
         
+        flow = Flow.from_client_secrets_file(
+            client_secrets_file,
+            scopes=['https://www.googleapis.com/auth/drive.readonly'], # Ensure scopes match original request
+            state=state,
+            redirect_uri=redirect_uri
+        )
+        
         try:
-            flow = Flow.from_client_secrets_file(
-                client_secrets_file,
-                scopes=['https://www.googleapis.com/auth/drive.readonly'],
-                state=state,
-                redirect_uri=redirect_uri
-            )
-            
-            # 使用授權碼換取令牌
             logging.info("🔄 使用授權碼換取令牌...")
             flow.fetch_token(code=code)
             credentials = flow.credentials
             
-            # 設定會話認證狀態
             session['authenticated'] = True
+            logging.info("✅ OAuth 認證狀態已設置為 True")
+
+            # 保存用戶信息到session
+            try:
+                # Use credentials.client_id which should be populated by the flow
+                google_client_id = credentials.client_id
+                
+                request_session_for_user_info = google.auth.transport.requests.Request()
+                id_info = id_token.verify_oauth2_token(
+                    credentials.id_token,
+                    request_session_for_user_info,
+                    google_client_id
+                )
+                user_info = {
+                    'id': id_info.get('sub'),
+                    'name': id_info.get('name', '未知用戶'),
+                    'email': id_info.get('email', ''),
+                    'picture': id_info.get('picture')
+                }
+                session['user_info'] = user_info
+                logging.info(f"✅ 用戶資訊已獲取並存儲到 session: {user_info.get('name')}")
+            except Exception as e:
+                logging.warning(f"⚠️ 在 auth_callback 中獲取用戶資訊失敗: {str(e)}. Session user_info 可能不完整。")
+                session['user_info'] = { 
+                    'id': 'unknown', 
+                    'name': '資訊獲取失敗', 
+                    'email': '', 
+                    'picture': None
+                }
+            
+            # 保存憑證到 session
+            session['credentials'] = {
+                'token': credentials.token,
+                'refresh_token': credentials.refresh_token,
+                'token_uri': credentials.token_uri,
+                'client_id': credentials.client_id,
+                'client_secret': credentials.client_secret,
+                'scopes': credentials.scopes,
+                'id_token': credentials.id_token if hasattr(credentials, 'id_token') else None 
+            }
+            logging.info("✅ OAuth 憑證已轉換並存儲到 session")
             
             # 使用OAuth憑證初始化Drive服務
             try:
                 if processor is not None:
-                    # 設置OAuth憑證到processor
                     if processor.set_oauth_credentials(credentials):
                         logging.info("✅ 已成功將OAuth憑證設置到AudioProcessor")
                     else:
                         logging.error("❌ 設置OAuth憑證到AudioProcessor失敗")
             except Exception as e:
-                logging.error(f"⚠️ 設置OAuth憑證時發生錯誤: {str(e)}")
+                logging.error(f"⚠️ 設置OAuth憑證到AudioProcessor時發生錯誤: {str(e)}")
             
-            logging.info("✅ OAuth 認證成功，重定向到回調頁面")
-            return redirect('/callback')
+            logging.info("✅ OAuth 認證成功，重定向到應用主頁")
+            return redirect('/') # Redirect to the main application page
+
+        except google.auth.exceptions.RefreshError as re:
+            error_msg = f"OAuth 憑證刷新失敗: {str(re)}"
+            logging.error(f"❌ OAuth 回調處理錯誤 (憑證刷新): {error_msg}", exc_info=True)
+            return redirect(f'/login?error={error_msg}')
+        except google.auth.exceptions.OAuthError as oe:
+            error_msg = f"OAuth 令牌交換或驗證失敗: {str(oe)}"
+            logging.error(f"❌ OAuth 回調處理錯誤 (OAuthError): {error_msg}", exc_info=True)
+            return redirect(f'/login?error={error_msg}')
         except Exception as e:
-            error_msg = f"建立 OAuth 流程失敗: {str(e)}"
-            logging.error(f"❌ OAuth 回調處理錯誤: {error_msg}", exc_info=True)
+            error_msg = f"處理 OAuth 回調時發生內部錯誤: {str(e)}" # Changed from "建立 OAuth 流程失敗"
+            logging.error(f"❌ OAuth 回調處理錯誤 (內部): {error_msg}", exc_info=True)
             return redirect(f'/login?error={error_msg}')    
             
-    except Exception as e:
-        error_msg = str(e)
-        logging.error(f"❌ OAuth 回調處理錯誤: {error_msg}", exc_info=True)
+    except Exception as e: # Outer try-except for pre-token-exchange issues
+        error_msg = f"OAuth 回調前置檢查失敗: {str(e)}"
+        logging.error(f"❌ OAuth 回調處理錯誤 (前置檢查): {error_msg}", exc_info=True)
         return redirect(f'/login?error={error_msg}')
 
 @auth_bp.route('/api/auth/token', methods=['POST'])

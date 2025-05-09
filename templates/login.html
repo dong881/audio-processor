@@ -67,45 +67,16 @@
                 console.error("Login button not found in the DOM");
             }
             
-            // 防止循環跳轉的標記
-            const redirectAttempted = sessionStorage.getItem('login_redirect_attempted');
-            
-            // 檢查是否已嘗試重定向，如果已嘗試則不再檢查驗證狀態
-            if (!redirectAttempted) {
-                // 設置標記
-                sessionStorage.setItem('login_redirect_attempted', 'true');
-                
-                // Check if already authenticated with improved error handling
-                fetch('/api/auth/status')
-                    .then(response => {
-                        if (!response.ok) {
-                            throw new Error(`HTTP error ${response.status}`);
-                        }
-                        return response.json();
-                    })
-                    .then(data => {
-                        if (data.authenticated) {
-                            // 清除標記以便下次重新檢查
-                            sessionStorage.removeItem('login_redirect_attempted');
-                            window.location.href = '/';
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Auth status check error:', error);
-                    })
-                    .finally(() => {
-                        // 5 秒後清除標記，允許再次嘗試
-                        setTimeout(() => {
-                            sessionStorage.removeItem('login_redirect_attempted');
-                        }, 5000);
-                    });
-            } else {
-                console.log('已嘗試過重定向，避免無限循環');
-                // 確保 30 秒後重設標記，防止永久鎖定
-                setTimeout(() => {
-                    sessionStorage.removeItem('login_redirect_attempted');
-                }, 30000);
-            }
+            // The JavaScript logic for checking auth status and redirecting from /login
+            // if already authenticated (previously around lines 72-106) is removed.
+            // This is now handled by static/js/auth.js, which should be included on this page.
+            // auth.js uses 'main_redirect_attempted' sessionStorage flag for this.
+
+            // The console log related to 'login_redirect_attempted' has been removed.
+            // const loginRedirectJustAttempted = sessionStorage.getItem('login_redirect_attempted');
+            // if (loginRedirectJustAttempted) {
+            //     console.log('Login page loaded. A redirect to this page was recently attempted (flagged by auth.js or app.js).');
+            // }
         });
     </script>
 </body>

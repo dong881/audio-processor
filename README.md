@@ -1,7 +1,8 @@
 # Audio Processing API
 
 This Flask application processes audio files from Google Drive, performs speech-to-text transcription and speaker diarization, attempts to identify speakers, generates a summary and to-do list using Google Gemini, optionally incorporates text from a PDF attachment, and creates a summary page in Notion.
-
+![alt text](docs/image-Main.png)
+![alt text](docs/image.png)
 ## Features
 
 *   Downloads audio files from Google Drive.
