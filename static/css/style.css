@@ -429,6 +429,7 @@ p {
   position: relative;
   height: 28px;
   margin: 0;
+  gap: 0.5em; /* Added gap for spacing between switch and icon */
 }
 
 /* 優化 toggle-track 樣式 */
@@ -475,13 +476,8 @@ p {
 
 /* 優化過濾圖標 - 修正對齊問題 */
 .filter-icon {
-  position: absolute; /* 改为绝对定位以便更好控制 */
-  top: 50%;
-  right: 32px;
-  transform: translateY(-50%);
   color: white;
   font-size: 0.9rem;
-  z-index: 1; /* 确保显示在上层 */
 }
 
 /* 修复过滤切换容器样式 */
@@ -705,7 +701,7 @@ p {
   border-radius: var(--radius-sm);
   border-left-width: 4px;
   border-left-style: solid;
-  animation: fadeInRight 0.3s, fadeOut 0.5s 5s forwards;
+  animation: fadeInRight 0.3s forwards; /* Removed fadeOut animation */
 }
 
 .alert-dismissible {
@@ -903,17 +899,17 @@ p {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.3s, visibility 0.3s, transform 0.3s;
+  transition: opacity 0.3s, visibility 0.3s; /* Removed transform from transition for in-place fade */
   bottom: 100%;
   left: 50%;
   margin-bottom: 0.5rem;
-  transform: translateX(-50%) translateY(-5px);
+  transform: translateX(-50%); /* Consistent transform */
 }
 
 .tooltip.show {
   opacity: 1;
   visibility: visible;
-  transform: translateX(-50%) translateY(0);
+  transform: translateX(-50%); /* Consistent transform */
 }
 
 .tooltip-inner {
@@ -1239,7 +1235,7 @@ p {
   
   /* 修正過濾器圖標位置 */
   .filter-icon {
-    right: 28px;
+    font-size: 0.9rem;
   }
 }
 
@@ -1282,7 +1278,6 @@ p {
   }
   
   .filter-icon {
-    right: 24px;
     font-size: 0.8rem;
   }
   
