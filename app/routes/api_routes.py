@@ -181,42 +181,87 @@ def drive_files():
         if processor.oauth_drive_service is None:
             return jsonify({'success': False, 'error': '未完成OAuth認證，請先登入'}), 401
 
-        # 取得篩選參數
         recordings_folder_name = request.args.get('recordingsFolderName')
         pdf_folder_name = request.args.get('pdfFolderName')
-        recordings_filter = request.args.get('recordingsFilter', 'disabled') == 'enabled'
-        pdf_filter = request.args.get('pdfFilter', 'disabled') == 'enabled'
+        recordings_filter_active = request.args.get('recordingsFilter') == 'enabled'
+        pdf_filter_active = request.args.get('pdfFilter') == 'enabled'
 
-        # 查找資料夾ID
-        folder_id = None
-        file_type_query = ""
-        if recordings_filter and recordings_folder_name:
-            folder_id = processor.find_folder_id_by_path(recordings_folder_name)
-            file_type_query = "mimeType contains 'audio/'"
-        elif pdf_filter and pdf_folder_name:
-            folder_id = processor.find_folder_id_by_path(pdf_folder_name)
-            file_type_query = "mimeType = 'application/pdf'"
+        logging.debug(
+            f"Drive files request: recordingsFilter={recordings_filter_active}, "
+            f"pdfFilter={pdf_filter_active}, recordingsFolder='{recordings_folder_name}', "
+            f"pdfFolder='{pdf_folder_name}'"
+        )
 
-        # 組合查詢
-        if folder_id:
-            query = f"trashed = false and '{folder_id}' in parents"
-            if file_type_query:
-                query += f" and ({file_type_query})"
+        audio_files_list = []
+        pdf_files_list = []
+
+        # 1. Fetch Audio Files
+        base_audio_query = "trashed = false and mimeType contains 'audio/'"
+        if recordings_filter_active:
+            if recordings_folder_name:
+                recordings_folder_id = processor.find_folder_id_by_path(recordings_folder_name)
+                if recordings_folder_id:
+                    logging.debug(f"Audio filter: Found folder ID '{recordings_folder_id}' for path '{recordings_folder_name}'")
+                    audio_query = f"{base_audio_query} and '{recordings_folder_id}' in parents"
+                    audio_files_list = processor.list_drive_files(query=audio_query)
+                else:
+                    # Filter is on, folder name provided, but folder not found. Return no audio files for this filter.
+                    logging.debug(f"Audio filter: Folder path '{recordings_folder_name}' not found.")
+                    audio_files_list = []
+            else:
+                # Filter is on, but no folder name provided (should not happen if UI is correct)
+                logging.debug("Audio filter: Active but no folder name provided.")
+                audio_files_list = []
         else:
-            query = "trashed = false and (mimeType contains 'audio/' or mimeType = 'application/pdf')"
+            # Recordings filter is OFF, fetch all audio files
+            logging.debug("Audio filter: OFF, fetching all audio files.")
+            audio_files_list = processor.list_drive_files(query=base_audio_query)
 
-        files = processor.list_drive_files(query=query)
+        # 2. Fetch PDF Files
+        base_pdf_query = "trashed = false and mimeType = 'application/pdf'"
+        if pdf_filter_active:
+            if pdf_folder_name:
+                pdf_folder_id = processor.find_folder_id_by_path(pdf_folder_name)
+                if pdf_folder_id:
+                    logging.debug(f"PDF filter: Found folder ID '{pdf_folder_id}' for path '{pdf_folder_name}'")
+                    pdf_query = f"{base_pdf_query} and '{pdf_folder_id}' in parents"
+                    pdf_files_list = processor.list_drive_files(query=pdf_query)
+                else:
+                    # Filter is on, folder name provided, but folder not found. Return no PDF files for this filter.
+                    logging.debug(f"PDF filter: Folder path '{pdf_folder_name}' not found.")
+                    pdf_files_list = []
+            else:
+                # Filter is on, but no folder name provided
+                logging.debug("PDF filter: Active but no folder name provided.")
+                pdf_files_list = []
+        else:
+            # PDF filter is OFF, fetch all PDF files
+            logging.debug("PDF filter: OFF, fetching all PDF files.")
+            pdf_files_list = processor.list_drive_files(query=base_pdf_query)
+
+        # Combine and de-duplicate by ID
+        combined_files_map = {}
+        for f in audio_files_list:
+            if f.get('id'):
+                combined_files_map[f.get('id')] = f
+        for f in pdf_files_list:
+            if f.get('id'):
+                combined_files_map[f.get('id')] = f
+
+        # Format files
         formatted_files = []
-        for file in files:
+        for file_id, file_data in combined_files_map.items():
             formatted_files.append({
-                'id': file.get('id'),
-                'name': file.get('name', '未命名檔案'),
-                'mimeType': file.get('mimeType', 'application/octet-stream'),
-                'size': file.get('size', 0),
-                'parents': file.get('parents', [])
+                'id': file_id,
+                'name': file_data.get('name', '未命名檔案'),
+                'mimeType': file_data.get('mimeType', 'application/octet-stream'),
+                'size': file_data.get('size', 0),
+                'parents': file_data.get('parents', [])
             })
+        
+        logging.info(f"Found {len(formatted_files)} unique files after filtering and combination.")
         return jsonify({'success': True, 'files': formatted_files})
 
     except Exception as e:
-        logging.error(f"獲取 Google Drive 檔案列表時發生錯誤: {str(e)}")
+        logging.error(f"獲取 Google Drive 檔案列表時發生錯誤: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'error': f'獲取檔案列表失敗: {str(e)}'}), 500
