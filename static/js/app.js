@@ -120,9 +120,14 @@ function setupEventListeners() {
     // 錄音資料夾過濾切換開關
     const recordingsFilterToggle = document.getElementById('filter-recordings-toggle');
     if (recordingsFilterToggle) {
-        // 載入保存的偏好設置
-        const savedPreference = localStorage.getItem('filter-recordings-enabled');
-        recordingsFilterEnabled = savedPreference === 'true';
+        // 載入保存的偏好設置或設置為預設開啟
+        const recordingsSavedPreference = localStorage.getItem('filter-recordings-enabled');
+        if (recordingsSavedPreference === null) {
+            recordingsFilterEnabled = true; // Default to true
+            localStorage.setItem('filter-recordings-enabled', 'true'); // Save default
+        } else {
+            recordingsFilterEnabled = (recordingsSavedPreference === 'true');
+        }
         recordingsFilterToggle.checked = recordingsFilterEnabled;
         
         // 更新視覺效果
@@ -152,9 +157,14 @@ function setupEventListeners() {
     // PDF資料夾過濾切換開關
     const pdfFilterToggle = document.getElementById('filter-pdf-toggle');
     if (pdfFilterToggle) {
-        // 載入保存的偏好設置
-        const savedPreference = localStorage.getItem('filter-pdf-enabled');
-        pdfFilterEnabled = savedPreference === 'true';
+        // 載入保存的偏好設置或設置為預設開啟
+        const pdfSavedPreference = localStorage.getItem('filter-pdf-enabled');
+        if (pdfSavedPreference === null) {
+            pdfFilterEnabled = true; // Default to true
+            localStorage.setItem('filter-pdf-enabled', 'true'); // Save default
+        } else {
+            pdfFilterEnabled = (pdfSavedPreference === 'true');
+        }
         pdfFilterToggle.checked = pdfFilterEnabled;
         
         // 更新視覺效果

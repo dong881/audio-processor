@@ -222,7 +222,7 @@ p {
 
 .app-card-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start; /* Changed from space-between */
   align-items: center;
 }
 
@@ -408,6 +408,7 @@ p {
   display: flex;
   align-items: center;
   gap: 1rem;
+  margin-left: auto; /* Added to push controls to the right */
 }
 
 /***************************************
@@ -429,7 +430,7 @@ p {
   position: relative;
   height: 28px;
   margin: 0;
-  gap: 0.5em; /* Added gap for spacing between switch and icon */
+  padding-left: 28px; /* Space for the icon */
 }
 
 /* 優化 toggle-track 樣式 */
@@ -448,7 +449,7 @@ p {
 .toggle-thumb {
   position: absolute;
   top: 2px;
-  left: 2px;
+  left: 30px; /* Adjusted: Was 2px. 28px (label padding) + 2px (thumb offset within track) */
   width: 20px;
   height: 20px;
   background: #fff;
@@ -470,12 +471,15 @@ p {
 
 /* 改變滑塊位置 */
 .toggle-input:checked + .toggle-label .toggle-thumb {
-  left: calc(100% - 2px);
-  transform: translateX(-100%);
+  left: 52px; /* Adjusted: Was 24px. 28px (label padding) + 24px (thumb offset within track for 46px track) */
 }
 
 /* 優化過濾圖標 - 修正對齊問題 */
 .filter-icon {
+  position: absolute;
+  left: 8px; /* Positioned within the padding-left of toggle-label */
+  top: 50%;
+  transform: translateY(-50%);
   color: white;
   font-size: 0.9rem;
 }
@@ -1277,6 +1281,10 @@ p {
     width: 40px;
   }
   
+  .toggle-input:checked + .toggle-label .toggle-thumb {
+    left: 46px; /* Adjusted: Was 18px. 28px (label padding) + 18px (thumb offset within track for 40px track) */
+  }
+
   .filter-icon {
     font-size: 0.8rem;
   }
