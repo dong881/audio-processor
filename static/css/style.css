@@ -1,3 +1,6 @@
+/***************************************
+ * 1. CSS VARIABLES AND GLOBAL SETTINGS
+ ***************************************/
 :root {
   /* 主要色彩變數 - 使用 HSL 方便主題變化 */
   --primary-h: 215;
@@ -52,7 +55,9 @@ body {
   font-size: var(--font-size-base);
 }
 
-/* 通用排版樣式 */
+/***************************************
+ * 2. TYPOGRAPHY
+ ***************************************/
 h1, h2, h3, h4, h5, h6 {
   color: var(--primary-color);
   margin-bottom: 0.75rem;
@@ -71,7 +76,125 @@ p {
   font-size: var(--font-size-base);
 }
 
-/* 卡片組件樣式 */
+/***************************************
+ * 3. LAYOUT AND GRID
+ ***************************************/
+.container {
+  width: 100%;
+  padding-right: var(--bs-gutter-x, 1.5rem);
+  padding-left: var(--bs-gutter-x, 1.5rem);
+  margin-right: auto;
+  margin-left: auto;
+  max-width: 1200px;
+}
+
+/* 網格系統 */
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  margin-right: -0.75rem;
+  margin-left: -0.75rem;
+}
+
+.col-12, .col-md-8, .col-lg-6 {
+  position: relative;
+  width: 100%;
+  padding-right: 0.75rem;
+  padding-left: 0.75rem;
+}
+
+.col-12 {
+  flex: 0 0 100%;
+  max-width: 100%;
+}
+
+/***************************************
+ * 4. NAVIGATION
+ ***************************************/
+/* 導覽列樣式 */
+.navbar {
+  padding: 0.75rem 1rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+}
+
+.navbar-dark {
+  background-color: #2d3748;
+}
+
+.navbar .container {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.navbar-brand {
+  display: flex;
+  align-items: center;
+  color: white;
+  font-weight: 500;
+  font-size: 1.4rem;
+  text-decoration: none;
+}
+
+.navbar-brand:hover {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.navbar-nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 2rem;
+  font-weight: 500;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.nav-link:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+/* Login/Logout button styles - consolidated */
+.nav-link#login-button, 
+.nav-link#logout-button {
+  background-color: #6c757d;
+  color: white;
+  border-radius: 2rem;
+  padding: 0.5rem 1.2rem;
+  transition: all 0.2s ease;
+  text-align: center;
+  min-width: 90px;
+}
+
+.nav-link#login-button:hover,
+.nav-link#logout-button:hover {
+  background-color: #5a6268;
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+/***************************************
+ * 5. CARD COMPONENTS
+ ***************************************/
+/* 卡片组件样式 - 优化合并 */
 .card {
   background-color: var(--card-background);
   border-radius: var(--radius-md);
@@ -80,6 +203,7 @@ p {
   overflow: hidden;
   margin-bottom: 1.75rem;
   transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+  animation: fadeIn 0.5s ease-out; /* 移动自动感觉更好 */
 }
 
 .card:hover {
@@ -87,20 +211,29 @@ p {
   transform: translateY(-2px);
 }
 
-.card-header {
+.card-header, .app-card-header {
   background-color: var(--primary-color);
   color: white;
-  padding: 1.25rem;
-  font-weight: 500;
+  padding: 1rem 1.25rem;
   font-size: var(--font-size-lg);
+  font-weight: 600;
   border-bottom: none;
+}
+
+.app-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .card-body {
   padding: 1.75rem;
 }
 
-/* 按鈕樣式 */
+/***************************************
+ * 6. BUTTONS
+ ***************************************/
+/* 按鈕樣式 - 統一化 */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -176,53 +309,33 @@ p {
   pointer-events: none;
 }
 
-/* 自定義卡片標題欄樣式 */
-.app-card-header {
-  background-color: var(--primary-color);
+/* 修改刷新按鈕去掉文字 */
+.refresh-btn {
+  background-color: rgba(255, 255, 255, 0.15);
   color: white;
-  padding: 1rem 1.25rem;
-  font-size: var(--font-size-lg);
-  font-weight: 600;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-/* 進度條樣式 */
-.progress {
-  height: 1.25rem;
-  background-color: #e9ecef;
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  margin: 1.25rem 0;
-}
-
-.progress-bar {
-  height: 100%;
-  background-color: var(--primary-color);
+  border: none;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
-  font-size: var(--font-size-sm);
-  transition: width 0.3s ease;
+  transition: all 0.2s ease;
 }
 
-.progress-bar-animated {
-  animation: progress-bar-stripes 1s linear infinite;
+.refresh-btn:hover {
+  background-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-2px);
 }
 
-.progress-bar-striped {
-  background-image: linear-gradient(45deg, rgba(255,255,255,0.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.15) 75%, transparent 75%, transparent);
-  background-size: 1rem 1rem;
+.refresh-btn i {
+  font-size: 1.1rem;
 }
 
-@keyframes progress-bar-stripes {
-  from { background-position: 1rem 0 }
-  to { background-position: 0 0 }
-}
-
-/* 表單樣式 */
+/***************************************
+ * 7. FORM ELEMENTS AND CONTROLS
+ ***************************************/
+/* 表單樣式 - 整合基本样式 */
 .form-check {
   position: relative;
   border: 1px solid transparent;
@@ -231,6 +344,7 @@ p {
   border-radius: var(--radius-sm);
   transition: all var(--transition-fast);
   background-color: rgba(255, 255, 255, 0.5);
+  animation: fadeIn 0.5s ease-out;
 }
 
 .form-check:hover {
@@ -289,431 +403,166 @@ p {
   box-shadow: 0 0 0 0.25rem rgba(74, 111, 165, 0.25);
 }
 
-/* 改善開關控件樣式 */
-.form-check.form-switch {
-  position: relative;
-  padding: 0;
-  width: 3.2em;
-  height: 1.6em;
-  margin: 0;
-  cursor: pointer;
-  padding-left: 0;
-}
-
-/* 隱藏原生checkbox */
-.form-check-input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-  margin: 0;
-}
-
-/* 過濾圖標樣式 */
-.filter-icon {
-  position: absolute;
-  right: 0.5em;
-  top: 50%;
-  transform: translateY(-50%);
-  color: white;
-  font-size: 0.8em;
-  z-index: 2;
-}
-
-/* 自定義開關背景 */
-.form-check.form-switch::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 3.2em;
-  height: 1.6em;
-  background-color: #6c757d;
-  border-radius: 1em;
-  transition: background-color 0.3s;
-}
-
-/* 自定義開關圓鈕 */
-.form-check.form-switch::after {
-  content: "";
-  position: absolute;
-  left: 0.2em;
-  top: 0.2em;
-  width: 1.2em;
-  height: 1.2em;
-  background-color: white;
-  border-radius: 50%;
-  transform: translateX(0);
-  transition: transform 0.3s ease-in-out;
-  z-index: 1;
-}
-
-/* 開關狀態樣式 */
-.recording-filter.form-check-input:checked + .filter-icon,
-.recording-filter input:checked ~ .filter-icon {
-  color: #28a745;
-}
-
-.pdf-filter.form-check-input:checked + .filter-icon,
-.pdf-filter input:checked ~ .filter-icon {
-  color: #0275d8;
-}
-
-/* 切換狀態時的背景與指示器變化 */
-.recording-filter input:checked ~ .form-check.form-switch::before,
-.recording-filter.form-check.form-switch.checked::before {
-  background-color: #28a745;
-}
-
-.pdf-filter input:checked ~ .form-check.form-switch::before,
-.pdf-filter.form-check.form-switch.checked::before {
-  background-color: #0275d8;
-}
-
-.form-check.form-switch.checked::after,
-.form-check-input:checked ~ .form-check.form-switch::after {
-  transform: translateX(1.6em);
-}
-
-/* Tooltip 樣式 - 修正淡入淡出 */
-.tooltip {
-  position: absolute;
-  z-index: 1080;
-  display: block;
-  font-family: 'Roboto', sans-serif;
-  font-style: normal;
-  font-weight: 400;
-  line-height: 1.5;
-  text-align: left;
-  text-decoration: none;
-  text-shadow: none;
-  text-transform: none;
-  letter-spacing: normal;
-  word-break: normal;
-  word-spacing: normal;
-  white-space: normal;
-  line-break: auto;
-  font-size: 0.95rem;
-  max-width: 250px;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
-.tooltip.show {
-  opacity: 1;
-  visibility: visible;
-}
-
-/* 覆蓋Bootstrap原有的tooltip動畫 */
-.tooltip.fade {
-  transition: opacity 0.3s !important;
-  transform: none !important;
-}
-
-.tooltip.fade.show {
-  opacity: 0.9 !important;
-}
-
-/* 改善開關控件樣式 */
-.form-check.form-switch {
-  position: relative;
-  padding-left: 0;
-  min-width: 3.6em;
-  margin-bottom: 0;
-}
-
-/* 隱藏原生checkbox */
-.form-check-input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-  margin: 0;
-}
-
-.form-check-label {
-  padding-left: 3.8em;
-  cursor: pointer;
-  color: white;
-  font-weight: 500;
-  font-size: 0.85rem;
-  margin-bottom: 0;
-  white-space: nowrap;
-  user-select: none;
-}
-
-/* 自定義開關背景 */
-.form-check-label::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3.2em;
-  height: 1.6em;
-  background-color: #6c757d;
-  border-radius: 1em;
-  transition: background-color 0.3s;
-}
-
-/* 自定義開關圓鈕 */
-.form-check-label::after {
-  content: "";
-  position: absolute;
-  left: 0.2em;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 1.2em;
-  height: 1.2em;
-  background-color: white;
-  border-radius: 50%;
-  transition: transform 0.3s ease-in-out;
-}
-
-/* 開關狀態樣式 */
-.recording-filter input:checked + .form-check-label::before {
-  background-color: #28a745;
-}
-
-.pdf-filter input:checked + .form-check-label::before {
-  background-color: #0275d8;
-}
-
-.form-check-input:checked + .form-check-label::after {
-  transform: translate(1.6em, -50%);
-}
-
-/* 開關文字狀態 */
-.form-check-label::before {
-  content: "OFF";
-  color: white;
-  font-size: 0.7em;
-  font-weight: 600;
-  text-align: right;
-  padding-right: 0.5em;
-  line-height: 1.6em;
-}
-
-.form-check-input:checked + .form-check-label::before {
-  content: "ON";
-  text-align: left;
-  padding-right: 0;
-  padding-left: 0.5em;
-}
-
-/* 標題區域控制項樣式 */
+/* 標題區域控制項樣式 - 修正對齊問題 */
 .header-controls {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 1rem;
 }
 
-/* 優化 filter-toggle-container 樣式 */
+/***************************************
+ * 8. TOGGLE SWITCHES - 合併和優化
+ ***************************************/
+/* 隱藏實際的 checkbox */
+.toggle-input {
+  height: 0;
+  width: 0;
+  visibility: hidden;
+  position: absolute;
+}
+
+/* 優化 toggle-label 樣式 */
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  position: relative;
+  height: 28px;
+  margin: 0;
+}
+
+/* 優化 toggle-track 樣式 */
+.toggle-track {
+  position: relative;
+  width: 46px;
+  height: 24px;
+  background: #6c757d;
+  border-radius: 100px;
+  transition: 0.3s;
+  display: block;
+  vertical-align: middle;
+}
+
+/* 優化 toggle-thumb 樣式 */
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  background: #fff;
+  border-radius: 50%;
+  transition: 0.3s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+/* 錄音檔過濾開關選中狀態 */
+.toggle-input:checked + .toggle-label .toggle-track {
+  background: #28a745;
+  animation: pulse 0.3s ease-out;
+}
+
+/* PDF過濾開關選中狀態 */
+#filter-pdf-toggle:checked + .toggle-label .toggle-track {
+  background: #0275d8;
+}
+
+/* 改變滑塊位置 */
+.toggle-input:checked + .toggle-label .toggle-thumb {
+  left: calc(100% - 2px);
+  transform: translateX(-100%);
+}
+
+/* 優化過濾圖標 - 修正對齊問題 */
+.filter-icon {
+  position: absolute; /* 改为绝对定位以便更好控制 */
+  top: 50%;
+  right: 32px;
+  transform: translateY(-50%);
+  color: white;
+  font-size: 0.9rem;
+  z-index: 1; /* 确保显示在上层 */
+}
+
+/* 修复过滤切换容器样式 */
 .filter-toggle-container {
   position: relative;
-  opacity: 1;
-  width: 3.6em;
-  height: 1.8em;
-  margin: 0;
-  background-image: none;
-  background-color: #ccc;
-  border-radius: 1em;
-  border: none;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  appearance: none;
-  -webkit-appearance: none;
-  -moz-appearance: none;
+  display: flex;
+  align-items: center;
 }
 
-.form-switch .form-check-input:focus {
-  box-shadow: 0 0 0 0.25rem rgba(25, 135, 84, 0.25);
-  border: none;
-  outline: none;
+/***************************************
+ * 9. USER PROFILE COMPONENTS - 合併重複定義
+ ***************************************/
+/* 統一用戶資訊卡片樣式 */
+.user-profile-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  padding: 0.5rem 1rem;
+  margin-right: 0.75rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: all var(--transition-fast);
 }
 
-.form-switch .form-check-input:checked {
-  background-color: #198754;
-  border-color: #198754;
+.user-profile-card:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-2px);
 }
 
-/* ON/OFF 文字標示 */
-.form-switch .form-check-input::before {
-  content: "OFF";
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  right: 0.5em;
-  color: white;
-  font-size: 0.75em;
-  font-weight: 600;
-  text-transform: uppercase;
-  transition: opacity 0.3s;
-}
-
-.form-switch .form-check-input:checked::before {
-  content: "ON";
-  right: auto;
-  left: 0.5em;
-}
-
-/* 滑動按鈕 */
-.form-switch .form-check-input::after {
-  content: "";
-  position: absolute;
-  top: 0.2em;
-  left: 0.2em;
-  width: 1.4em;
-  height: 1.4em;
-  background-color: white;
+.user-avatar {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
   border-radius: 50%;
-  transform: translateX(0);
-  transition: transform 0.3s ease-in-out, background-color 0.3s;
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  background-color: rgba(255, 255, 255, 0.2);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
-.form-switch .form-check-input:checked::after {
-  transform: translateX(1.8em);
+.user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
-/* 標籤文字樣式 */
-.form-switch .form-check-label {
-  padding-left: 0.75em;
-  cursor: pointer;
-  color: white;
-  font-weight: 500;
-  margin-bottom: 0;
-  user-select: none;
+.user-details {
+  display: flex;
+  flex-direction: column;
 }
 
-/* 獨立開關風格差異 */
-.recording-filter .form-check-input {
-  background-color: #6c757d;
-}
-
-.recording-filter .form-check-input:checked {
-  background-color: #28a745;
-}
-
-.pdf-filter .form-check-input {
-  background-color: #6c757d;
-}
-
-.pdf-filter .form-check-input:checked {
-  background-color: #0275d8;
-}
-
-/* Tooltip 樣式 - 統一定義 */
-.tooltip {
-  position: absolute;
-  z-index: 1080;
-  display: block;
-  font-family: 'Roboto', sans-serif;
-  font-style: normal;
-  font-weight: 400;
-  line-height: 1.5;
-  text-align: left;
-  text-decoration: none;
-  text-shadow: none;
-  text-transform: none;
-  letter-spacing: normal;
-  word-break: normal;
-  word-spacing: normal;
-  white-space: normal;
-  line-break: auto;
+.user-name {
+  font-weight: 600;
   font-size: 0.95rem;
-  max-width: 250px;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(5px);
-  transition: opacity 0.3s ease, visibility 0.3s ease, transform 0.3s ease;
-  pointer-events: none;
-}
-
-.tooltip.show {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
-}
-
-.tooltip-inner {
-  max-width: 250px;
-  padding: 0.75rem 1rem;
   color: #fff;
-  text-align: center;
-  background-color: rgba(38, 50, 56, 0.95);
-  border-radius: 0.5rem;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
-  font-weight: 400;
-  line-height: 1.5;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
 }
 
-.tooltip-arrow {
-  position: absolute;
-  width: 0;
-  height: 0;
-  border-color: transparent;
-  border-style: solid;
+.user-email {
+  font-size: 0.75rem;
+  opacity: 0.85;
+  color: #fff;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
 }
 
-/* 修改Tooltip動畫為淡入淡出 */
-.tooltip {
-  opacity: 0;
-  transition: opacity 0.3s;
-}
-
-.tooltip.show {
-  opacity: 1;
-}
-
-/* 覆蓋Bootstrap原有的tooltip動畫 */
-.tooltip.fade {
-  transition: opacity 0.3s !important;
-  transform: none !important;
-}
-
-.tooltip.fade.show {
-  opacity: 0.9 !important;
-}
-
-/* 動畫效果 */
-@keyframes fadeInRight {
-  from {
-    opacity: 0;
-    transform: translateX(50px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes fadeOut {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-/* 開關變換動畫 */
-@keyframes pulse {
-  0% { transform: scale(1); }
-  50% { transform: scale(1.05); }
-  100% { transform: scale(1); }
-}
-
-.pulse {
-  animation: pulse 0.3s ease-in-out;
-}
-
-/* 檔案選擇新樣式 */
+/***************************************
+ * 10. FILE OPTIONS AND SELECTIONS
+ ***************************************/
+/* 自定義檔案選擇樣式 - 統一化 */
 .file-option {
   position: relative;
   border: 2px solid var(--border-color);
@@ -722,7 +571,6 @@ p {
   margin-bottom: 1rem;
   display: flex;
   align-items: center;
-  margin-right: 0.5rem;
   cursor: pointer;
   transition: all 0.25s ease;
   background-color: white;
@@ -772,10 +620,32 @@ p {
   color: var(--text-muted);
 }
 
-/* 縮小pending標籤的樣式 */
-.badge.bg-warning {
-  font-size: 0.75rem;
-  padding: 0.25rem 0.5rem;
+/* 選擇器樣式 */
+.file-option-selector {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 1rem;
+  transition: all 0.2s ease;
+  background-color: white;
+}
+
+.file-option-selector .bi-check-circle-fill {
+  display: none;
+  color: var(--primary-color);
+  font-size: 22px;
+}
+
+.file-option.selected .file-option-selector {
+  border-color: var(--primary-color);
+}
+
+.file-option.selected .file-option-selector .bi-check-circle-fill {
+  display: block;
 }
 
 /* 改進附件多選樣式 */
@@ -824,6 +694,9 @@ p {
   pointer-events: none;
 }
 
+/***************************************
+ * 11. ALERTS AND NOTIFICATIONS
+ ***************************************/
 /* 提示訊息樣式 */
 .alert {
   position: relative;
@@ -867,6 +740,9 @@ p {
   border-left-color: #2196f3;
 }
 
+/***************************************
+ * 12. LOADING INDICATORS
+ ***************************************/
 /* 加載動畫 */
 .spinner-border {
   display: inline-block;
@@ -885,15 +761,6 @@ p {
 }
 
 /* 刷新旋轉動畫 */
-@keyframes rotating {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .rotating {
   animation: rotating 1s linear infinite;
 }
@@ -911,347 +778,54 @@ p {
   color: var(--primary-color);
 }
 
-/* 用戶信息樣式優化 */
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.4rem 1rem;
-  background-color: rgba(255, 255, 255, 0.15);
-  border-radius: 3rem;
-  transition: background-color 0.3s;
-  margin-right: 0.5rem;
-}
-
-.user-info:hover {
-  background-color: rgba(255, 255, 255, 0.25);
-}
-
-.user-avatar {
-  width: 36px;
-  height: 36px;
-  min-width: 36px; /* Prevent shrinking */
-  border-radius: 50%;
-  overflow: hidden;
-  background-color: rgba(255, 255, 255, 0.2);
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-}
-
-.user-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.user-details {
-  display: flex;
-  flex-direction: column;
-}
-
-.user-name {
-  font-weight: 500;
-  font-size: 0.9rem;
-  color: #fff;
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 120px;
-}
-
-.user-email {
-  font-size: 0.75rem;
-  opacity: 0.85;
-  color: #fff;
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 120px;
-}
-
-/* 改善登出按鈕樣式 */
-.logout-btn {
-  background-color: rgba(108, 117, 125, 0.8);
-  color: white;
-  border-radius: 3rem;
-  padding: 0.5rem 1.2rem;
-  font-weight: 500;
-  border: none;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  transition: all 0.2s ease;
-}
-
-.logout-btn:hover {
-  background-color: rgba(108, 117, 125, 1);
-  transform: translateY(-2px);
-}
-
-/* 隱藏實際的 checkbox */
-.toggle-input {
-  height: 0;
-  width: 0;
-  visibility: hidden;
-  position: absolute;
-}
-
-/* 優化 toggle-label 樣式 */
-.toggle-label {
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  position: relative;
-}
-
-/* 優化 toggle-track 樣式 */
-.toggle-track {
-  position: relative;
-  width: 42px;
-  height: 22px;
-  background: #6c757d;
-  border-radius: 100px;
-  transition: 0.3s;
-  display: block;
-}
-
-/* 優化 toggle-thumb 樣式 */
-.toggle-thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
-  background: #fff;
-  border-radius: 50%;
-  transition: 0.3s;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-}
-
-/* 錄音檔過濾開關選中狀態 */
-.toggle-input:checked + .toggle-label .toggle-track {
-  background: #28a745;
-  animation: pulse 0.3s ease-out;
-}
-
-/* PDF過濾開關選中狀態 */
-#filter-pdf-toggle:checked + .toggle-label .toggle-track {
-  background: #0275d8;
-}
-
-/* 改變滑塊位置 */
-.toggle-input:checked + .toggle-label .toggle-thumb {
-  left: calc(100% - 2px);
-  transform: translateX(-100%);
-}
-
-/* 優化過濾圖標 */
-.filter-icon {
-  position: absolute;
-  top: 50%;
-  right: -22px;
-  transform: translateY(-50%);
-  color: white;
-  font-size: 0.9rem;
-}
-
-/* 修改刷新按鈕去掉文字 */
-.refresh-btn {
-  background-color: rgba(255, 255, 255, 0.15);
-  color: white;
-  border: none;
-  border-radius: 50%;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
-}
-
-.refresh-btn:hover {
-  background-color: rgba(255, 255, 255, 0.25);
-  transform: translateY(-2px);
-}
-
-.refresh-btn i {
-  font-size: 1.1rem;
-}
-
-/* 自定義檔案選擇樣式 */
-.file-option {
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: 1rem;
-  margin-bottom: 1rem;
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  transition: all var(--transition-normal);
-}
-
-.file-option:hover {
-  background-color: var(--hover-color);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-sm);
-}
-
-.file-option.selected {
-  background-color: var(--selected-color);
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 2px rgba(74, 111, 165, 0.2);
-}
-
-.file-option-icon {
-  font-size: 2rem;
-  color: var(--primary-color);
-  margin-right: 1rem;
-  min-width: 2rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.file-option-info {
-  flex: 1;
-}
-
-.file-option-name {
-  font-weight: 500;
-  font-size: var(--font-size-base);
-  margin-bottom: 0.25rem;
-  color: var(--text-color);
-}
-
-.file-option-size {
-  font-size: var(--font-size-sm);
-  color: var(--text-muted);
-}
-
-.file-option input[type="radio"] {
+/* 登入頁面特有樣式 */
+.loading-spinner {
   display: none;
-}
-
-.file-option-selector {
-  width: 24px;
-  height: 24px;
+  margin: 20px auto;
+  width: 40px;
+  height: 40px;
+  border: 4px solid rgba(74, 111, 165, 0.3);
   border-radius: 50%;
-  border: 2px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: 1rem;
-  transition: all 0.2s ease;
-  background-color: white;
+  border-top: 4px solid var(--primary-color);
+  animation: spin 1s linear infinite;
 }
 
-.file-option-selector .bi-check-circle-fill {
-  display: none;
-  color: var(--primary-color);
-  font-size: 22px;
-}
-
-.file-option.selected .file-option-selector {
-  border-color: var(--primary-color);
-}
-
-.file-option.selected .file-option-selector .bi-check-circle-fill {
-  display: block;
-}
-
-/* 改進用戶資訊卡片樣式 */
-.user-profile-card {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  background-color: rgba(255, 255, 255, 0.1);
-  border-radius: var(--radius-md);
-  padding: 0.5rem 1rem;
-  margin-right: 0.75rem;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  transition: all var(--transition-fast);
-}
-
-.user-profile-card:hover {
-  background-color: rgba(255, 255, 255, 0.2);
-  transform: translateY(-2px);
-}
-
-.user-avatar {
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  border-radius: 50%;
-  overflow: hidden;
-  background-color: rgba(255, 255, 255, 0.2);
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.user-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.user-details {
-  display: flex;
-  flex-direction: column;
-}
-
-.user-name {
-  font-weight: 600;
-  font-size: 0.95rem;
-  color: #fff;
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 150px;
-}
-
-.user-email {
-  font-size: 0.75rem;
-  opacity: 0.85;
-  color: #fff;
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 150px;
-}
-
-/* 工作區塊樣式 */
-.jobs-list {
-  margin-top: 1rem;
-}
-
-.job-item {
-  padding: 1rem;
-  border: 1px solid var(--border-color);
+/***************************************
+ * 13. PROGRESS INDICATORS
+ ***************************************/
+/* 進度條樣式 */
+.progress {
+  height: 1.25rem;
+  background-color: #e9ecef;
   border-radius: var(--radius-sm);
-  margin-bottom: 1rem;
-  background-color: var(--card-background);
+  overflow: hidden;
+  margin: 1.25rem 0;
 }
 
-.job-header {
+.progress-bar {
+  height: 100%;
+  background-color: var(--primary-color);
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 0.75rem;
+  justify-content: center;
+  color: white;
+  font-size: var(--font-size-sm);
+  transition: width 0.3s ease;
 }
 
-.job-title {
-  font-weight: bold;
+.progress-bar-animated {
+  animation: progress-bar-stripes 1s linear infinite;
 }
 
+.progress-bar-striped {
+  background-image: linear-gradient(45deg, rgba(255,255,255,0.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.15) 75%, transparent 75%, transparent);
+  background-size: 1rem 1rem;
+}
+
+/***************************************
+ * 14. STATUS INDICATORS 
+ ***************************************/
+/* 狀態徽章 */
 .badge {
   display: inline-block;
   padding: 0.35em 0.65em;
@@ -1281,6 +855,12 @@ p {
   background-color: #f44336;
 }
 
+/* 縮小pending標籤的樣式 */
+.badge.bg-warning {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+}
+
 /* 處理流程優化 */
 .workflow-section {
   display: flex;
@@ -1308,7 +888,170 @@ p {
   background-color: #4caf50;
 }
 
-/* 工具類 */
+/***************************************
+ * 15. TOOLTIPS 
+ ***************************************/
+/* Tooltip 樣式 - 修正位置問題 */
+.tooltip {
+  position: absolute;
+  z-index: 1080;
+  display: block;
+  font-family: 'Roboto', sans-serif;
+  font-size: 0.95rem;
+  max-width: 300px;
+  width: max-content;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.3s, visibility 0.3s, transform 0.3s;
+  bottom: 100%;
+  left: 50%;
+  margin-bottom: 0.5rem;
+  transform: translateX(-50%) translateY(-5px);
+}
+
+.tooltip.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+.tooltip-inner {
+  padding: 0.75rem 1rem;
+  color: #fff;
+  text-align: center;
+  background-color: rgba(38, 50, 56, 0.95);
+  border-radius: 0.5rem;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+  font-weight: 400;
+  line-height: 1.5;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  min-width: 120px;
+}
+
+.tooltip-arrow {
+  position: absolute;
+  bottom: -5px;
+  left: 50%;
+  margin-left: -5px;
+  width: 0;
+  height: 0;
+  border-width: 5px 5px 0;
+  border-top-color: rgba(38, 50, 56, 0.95);
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+  border-left-color: transparent;
+  border-style: solid;
+}
+
+/***************************************
+ * 16. SPECIAL PAGES 
+ ***************************************/
+/* 登入頁面特有樣式 */
+.login-container {
+  width: 100%;
+  max-width: 450px;
+  background-color: var(--card-background);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+  margin: 50px auto;
+  transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.login-container:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 15px 30px rgba(0, 0, 0, 0.1);
+}
+
+.logo-circle {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background-color: var(--primary-color);
+  color: white;
+  font-size: 2rem;
+  font-weight: bold;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+}
+
+.login-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background-color: var(--accent-color);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all var(--transition-fast);
+}
+
+.login-button:hover {
+  background-color: var(--accent-hover);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.login-button img {
+  width: 24px;
+}
+
+.login-message {
+  margin-top: 20px;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-sm);
+  display: none;
+}
+
+.login-message.error {
+  background-color: #ffebee;
+  color: #c62828;
+  border-left: 4px solid #c62828;
+}
+
+.login-message.info {
+  background-color: #e3f2fd;
+  color: #1565c0;
+  border-left: 4px solid #1565c0;
+}
+
+/* 回調頁面樣式 */
+.callback-container {
+  text-align: center;
+  padding: 2rem;
+  background-color: white;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  max-width: 450px;
+  width: 100%;
+  margin: 3rem auto;
+}
+
+.callback-spinner {
+  border: 4px solid rgba(0, 0, 0, 0.1);
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border-left-color: var(--primary-color);
+  animation: spin 1s linear infinite;
+  margin: 1.5rem auto;
+}
+
+/***************************************
+ * 17. UTILITY CLASSES
+ ***************************************/
 .d-none {
   display: none !important;
 }
@@ -1360,121 +1103,87 @@ p {
   width: 100% !important;
 }
 
-/* 登入頁面特有樣式 */
-.login-container {
-  width: 100%;
-  max-width: 450px;
-  background-color: var(--card-background);
-  border-radius: var(--radius-lg);
-  padding: 2rem;
-  box-shadow: var(--shadow-lg);
-  text-align: center;
-  margin: 50px auto;
-  transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+/***************************************
+ * 18. ANIMATIONS
+ ***************************************/
+@keyframes fadeInRight {
+  from {
+    opacity: 0;
+    transform: translateX(50px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
-.login-container:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 15px 30px rgba(0, 0, 0, 0.1);
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
-.logo-circle {
-  width: 80px;
-  height: 80px;
-  margin: 0 auto 1.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background-color: var(--primary-color);
-  color: white;
-  font-size: 2rem;
-  font-weight: bold;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
-.loading-spinner {
-  display: none;
-  margin: 20px auto;
-  width: 40px;
-  height: 40px;
-  border: 4px solid rgba(74, 111, 165, 0.3);
-  border-radius: 50%;
-  border-top: 4px solid var(--primary-color);
-  animation: spin 1s linear infinite;
+@keyframes rotating {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-.login-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  background-color: var(--accent-color);
-  color: white;
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 0.75rem 1.5rem;
-  font-size: 1rem;
-  font-weight: 500;
-  cursor: pointer;
-  text-decoration: none;
-  transition: all var(--transition-fast);
+@keyframes progress-bar-stripes {
+  from { background-position: 1rem 0 }
+  to { background-position: 0 0 }
 }
 
-.login-button:hover {
-  background-color: var(--accent-hover);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
+/* 開關變換動畫 */
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
 }
 
-.login-button img {
-  width: 24px;
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-.login-message {
-  margin-top: 20px;
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius-sm);
-  display: none;
+.pulse {
+  animation: pulse 0.3s ease-in-out;
 }
 
-.login-message.error {
-  background-color: #ffebee;
-  color: #c62828;
-  border-left: 4px solid #c62828;
+/***************************************
+ * 19. RESPONSIVE STYLES
+ ***************************************/
+@media (min-width: 768px) {
+  .col-md-8 {
+    flex: 0 0 66.666667%;
+    max-width: 66.666667%;
+  }
 }
 
-.login-message.info {
-  background-color: #e3f2fd;
-  color: #1565c0;
-  border-left: 4px solid #1565c0;
+@media (min-width: 992px) {
+  .col-lg-6 {
+    flex: 0 0 50%;
+    max-width: 50%;
+  }
 }
 
-/* Improved navbar styles for horizontal alignment */
-.navbar .container {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-}
-
-/* Style for login button to match logout button */
-.nav-link#login-button {
-  background-color: #6c757d;
-  color: white;
-  border-radius: 2rem;
-  padding: 0.5rem 1.2rem;
-  transition: all 0.2s ease;
-}
-
-.nav-link#login-button:hover {
-  background-color: #5a6268;
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-sm);
-}
-
-/* 響應式調整 */
 @media (max-width: 1200px) {
   .container {
     max-width: 960px;
@@ -1527,6 +1236,11 @@ p {
   .user-details {
     display: none; /* Hide details on small screens */
   }
+  
+  /* 修正過濾器圖標位置 */
+  .filter-icon {
+    right: 28px;
+  }
 }
 
 @media (max-width: 576px) {
@@ -1561,157 +1275,18 @@ p {
   .nav-link i {
     margin-right: 0.25rem !important;
   }
-}
-
-/* 導覽列樣式 */
-.navbar {
-  padding: 0.75rem 1rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  position: sticky;
-  top: 0;
-  z-index: 1000;
-}
-
-.navbar-dark {
-  background-color: #2d3748;
-}
-
-.navbar-brand {
-  display: flex;
-  align-items: center;
-  color: white;
-  font-weight: 500;
-  font-size: 1.4rem;
-  text-decoration: none;
-}
-
-.navbar-brand:hover {
-  color: rgba(255, 255, 255, 0.9);
-}
-
-.navbar-nav {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  justify-content: flex-end;
-}
-
-.nav-item {
-  display: flex;
-  align-items: center;
-}
-
-.nav-link {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  border-radius: 2rem;
-  font-weight: 500;
-  transition: background-color 0.2s, color 0.2s;
-}
-
-.nav-link:hover {
-  background-color: rgba(255, 255, 255, 0.15);
-}
-
-/* Login/Logout button styles */
-.nav-link#login-button, 
-.nav-link#logout-button {
-  background-color: #6c757d;
-  color: white;
-  border-radius: 2rem;
-  padding: 0.5rem 1.2rem;
-  transition: all 0.2s ease;
-  text-align: center;
-  min-width: 90px;
-}
-
-.nav-link#login-button:hover,
-.nav-link#logout-button:hover {
-  background-color: #5a6268;
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-sm);
-}
-
-.container {
-  width: 100%;
-  padding-right: var(--bs-gutter-x, 1.5rem);
-  padding-left: var(--bs-gutter-x, 1.5rem);
-  margin-right: auto;
-  margin-left: auto;
-  max-width: 1200px;
-}
-
-/* 網格系統 */
-.row {
-  display: flex;
-  flex-wrap: wrap;
-  margin-right: -0.75rem;
-  margin-left: -0.75rem;
-}
-
-.col-12, .col-md-8, .col-lg-6 {
-  position: relative;
-  width: 100%;
-  padding-right: 0.75rem;
-  padding-left: 0.75rem;
-}
-
-.col-12 {
-  flex: 0 0 100%;
-  max-width: 100%;
-}
-
-@media (min-width: 768px) {
-  .col-md-8 {
-    flex: 0 0 66.666667%;
-    max-width: 66.666667%;
+  
+  /* 進一步調整過濾器元素 */
+  .toggle-track {
+    width: 40px;
   }
-}
-
-@media (min-width: 992px) {
-  .col-lg-6 {
-    flex: 0 0 50%;
-    max-width: 50%;
+  
+  .filter-icon {
+    right: 24px;
+    font-size: 0.8rem;
   }
-}
-
-/* 卡片 & 列表動畫 */
-.card, .form-check {
-  animation: fadeIn 0.5s ease-out;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
+  
+  .header-controls {
+    gap: 0.5rem;
   }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* 回調頁面樣式 */
-.callback-container {
-  text-align: center;
-  padding: 2rem;
-  background-color: white;
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  max-width: 450px;
-  width: 100%;
-  margin: 3rem auto;
-}
-
-.callback-spinner {
-  border: 4px solid rgba(0, 0, 0, 0.1);
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  border-left-color: var(--primary-color);
-  animation: spin 1s linear infinite;
-  margin: 1.5rem auto;
 }

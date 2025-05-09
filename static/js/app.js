@@ -187,7 +187,17 @@ function setupEventListeners() {
         tooltipTriggerList.forEach(function(tooltipTriggerEl) {
             new bootstrap.Tooltip(tooltipTriggerEl, {
                 animation: true,
-                trigger: 'hover focus'
+                trigger: 'hover focus',
+                boundary: document.body, // 添加邊界設定以修復滾動問題
+                popperConfig: {
+                    modifiers: [{
+                        name: 'preventOverflow',
+                        options: {
+                            boundary: document.body,
+                            padding: 8
+                        }
+                    }]
+                }
             });
         });
     } else {
