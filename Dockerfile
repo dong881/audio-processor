@@ -41,4 +41,4 @@ ENV GOOGLE_CLIENT_SECRET_PATH=/app/credentials/client_secret.json
 # Gunicorn is specified in requirements.txt
 # Bind to 0.0.0.0 to be accessible from outside the container
 # Number of workers can be adjusted. Timeout increased for potentially long audio tasks.
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "main:app", "--timeout", "300", "--workers", "3"] 
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "main:app", "--timeout", "600", "--workers", "2"] 

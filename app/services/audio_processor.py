@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 import requests
+import atexit
 
 # Google API 相關
 from google.oauth2.credentials import Credentials
@@ -54,6 +55,8 @@ class AudioProcessor:
         
         # 初始化執行緒池
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        # 註冊 executor 關閉函數
+        atexit.register(self.shutdown_executor)
         # 工作狀態追蹤
         self.jobs = {}
         # 確保線程安全的鎖
@@ -1145,6 +1148,7 @@ class AudioProcessor:
         attachments_temp_dir = None
         downloaded_pdf_paths = []
         context_summary = ""
+        attachment_texts = []
 
         try:
             logging.info(f"[Job {job_id}] 開始處理 file_id: {file_id}")
@@ -1274,10 +1278,10 @@ class AudioProcessor:
             logging.error(f"[Job {job_id}] ❌ 處理失敗: {e}", exc_info=True)
             
             # 準備錯誤結果
-            final_title = summary_data["title"] if summary_data else "處理失敗"
-            final_summary = summary_data["summary"] if summary_data else f"處理過程中發生錯誤: {e}"
-            final_todos = summary_data["todos"] if summary_data else ["檢查處理日誌"]
-            final_speakers = speaker_map if speaker_map else None
+            final_title = summary_data["title"] if 'summary_data' in locals() and summary_data else "處理失敗"
+            final_summary = summary_data["summary"] if 'summary_data' in locals() and summary_data else f"處理過程中發生錯誤: {e}"
+            final_todos = summary_data["todos"] if 'summary_data' in locals() and summary_data else ["檢查處理日誌"]
+            final_speakers = speaker_map if 'speaker_map' in locals() and speaker_map else None
             
             # 更新工作狀態為失敗
             error_result = {
@@ -1395,3 +1399,14 @@ class AudioProcessor:
                 logging.info(f"📊 工作進度更新 - ID: {job_id}, 狀態: {self.jobs[job_id]['status']}, 進度: {progress}%, 訊息: {message}")
             else:
                 logging.warning(f"⚠️ 嘗試更新不存在的工作 ID: {job_id}")
+
+    def shutdown_executor(self):
+        """優雅地關閉 ThreadPoolExecutor"""
+        if hasattr(self, 'executor') and self.executor:
+            logging.info("🔄 正在關閉 AudioProcessor 的 ThreadPoolExecutor...")
+            try:
+                # 等待所有目前正在執行的任務完成，但不接受新任務
+                self.executor.shutdown(wait=True)
+                logging.info("✅ AudioProcessor 的 ThreadPoolExecutor 已成功關閉。")
+            except Exception as e:
+                logging.error(f"❌ 關閉 AudioProcessor 的 ThreadPoolExecutor 時發生錯誤: {e}", exc_info=True)
