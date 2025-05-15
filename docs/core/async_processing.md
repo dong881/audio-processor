@@ -15,13 +15,13 @@ Creates an asynchronous job for file processing and returns a job ID.
 ### Signature
 
 ```python
-def process_file_async(self, file_id: str, attachment_file_id: Optional[str] = None) -> str:
+def process_file_async(self, file_id: str, attachment_file_ids: Optional[List[str]] = None) -> str:
 ```
 
 ### Parameters
 
 - `file_id` (str): Google Drive ID of the audio file to be processed
-- `attachment_file_id` (Optional[str]): Google Drive ID of an optional PDF attachment
+- `attachment_file_ids` (Optional[List[str]]): A list of Google Drive IDs for optional PDF attachments.
 
 ### Returns
 
@@ -38,7 +38,7 @@ This function initializes a new asynchronous processing job by:
 
 ```python
 # Initialize a new processing job
-job_id = processor.process_file_async("1abc2defghijk3lmno4pqrs5tuv", "6vwx7yz8abcd9efgh0ijkl")
+job_id = processor.process_file_async("1abc2defghijk3lmno4pqrs5tuv", ["6vwx7yz8abcd9efgh0ijkl", "1mnop2qrst3uvwx4yz5abcd"])
 
 # The job_id can be used to check the status later
 print(f"Job initiated with ID: {job_id}")
@@ -51,14 +51,14 @@ Background worker function that processes the audio file and updates job status.
 ### Signature
 
 ```python
-def _process_file_job(self, job_id: str, file_id: str, attachment_file_id: Optional[str] = None):
+def _process_file_job(self, job_id: str, file_id: str, attachment_file_ids: Optional[List[str]] = None):
 ```
 
 ### Parameters
 
 - `job_id` (str): The unique identifier for this job
 - `file_id` (str): Google Drive ID of the audio file to be processed
-- `attachment_file_id` (Optional[str]): Google Drive ID of an optional PDF attachment
+- `attachment_file_ids` (Optional[List[str]]): A list of Google Drive IDs for optional PDF attachments.
 
 ### Returns
 
@@ -68,7 +68,7 @@ def _process_file_job(self, job_id: str, file_id: str, attachment_file_id: Optio
 
 This function executes the complete audio processing pipeline:
 1. Updates job status to "processing" and sets progress to 5%
-2. Downloads the audio file and optional attachment
+2. Downloads the audio file and optional attachments (if provided as a list)
 3. Processes audio with regular status updates at key milestones
 4. Identifies speakers, generates summary, creates Notion page
 5. Renames the Google Drive file with the generated title

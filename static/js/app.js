@@ -441,7 +441,7 @@ async function loadDriveFiles() {
             if (audioFiles.length === 0) {
                 elements.fileList.innerHTML = `
                     <div class="alert alert-info">
-                        <i class="bi bi-info-circle-fill me-2" style="font-size: 1.5rem;"></i>
+                        <i class="bi bi-info-circle-fill me-2"></i>
                         ${recordingsFilterEnabled ? 
                             `未在 ${RECORDINGS_FOLDER} 資料夾中找到音訊檔案。請上傳音訊檔案到此資料夾。` : 
                             '未找到音訊檔案。請上傳音訊檔案到您的 Google Drive.'}
@@ -492,9 +492,9 @@ async function loadDriveFiles() {
                     </div>`;
             } else {
                 elements.attachmentList.innerHTML = '';
-                // 添加"無附件"選項，使用特殊樣式
+                // 添加"無附件"選項
                 const noneOption = document.createElement('div');
-                noneOption.className = 'attachment-option none-option selected';
+                noneOption.className = 'attachment-option none-option selected'; // Default selected
                 noneOption.innerHTML = `
                     <input type="checkbox" id="attachment-none" value="" data-none="true" checked>
                     <div class="file-icon">
@@ -506,23 +506,16 @@ async function loadDriveFiles() {
                     </div>
                 `;
                 
-                // 點擊"無附件"選項時
                 noneOption.addEventListener('click', function() {
                     const input = this.querySelector('input');
-                    input.checked = !input.checked;
+                    input.checked = true; // Clicking "None" always selects it
+                    this.classList.add('selected');
                     
-                    // 更新選中樣式
-                    if (input.checked) {
-                        this.classList.add('selected');
-                        
-                        // 取消所有其他附件的選擇
-                        document.querySelectorAll('.attachment-option:not(:first-child)').forEach(el => {
-                            el.classList.remove('selected');
-                            el.querySelector('input').checked = false;
-                        });
-                    } else {
-                        this.classList.remove('selected');
-                    }
+                    // 取消所有其他附件的選擇
+                    document.querySelectorAll('.attachment-option:not(.none-option)').forEach(el => {
+                        el.classList.remove('selected');
+                        el.querySelector('input').checked = false;
+                    });
                 });
                 elements.attachmentList.appendChild(noneOption);
                 
@@ -542,35 +535,29 @@ async function loadDriveFiles() {
                         </div>
                     `;
                     
-                    // 點擊PDF附件選項時
                     option.addEventListener('click', function() {
                         const input = this.querySelector('input');
-                        input.checked = !input.checked;
+                        input.checked = !input.checked; // Toggle current PDF's checked state
                         
                         if (input.checked) {
-                            // 選中了一個PDF附件，取消"無附件"的選擇
-                            const noneOption = document.querySelector('.attachment-option:first-child');
-                            if (noneOption) {
-                                noneOption.classList.remove('selected');
-                                noneOption.querySelector('input').checked = false;
-                            }
-                            
-                            // 添加選中樣式
                             this.classList.add('selected');
+                            // 選中了一個PDF附件，取消"無附件"的選擇
+                            const noneOptionEl = document.querySelector('.attachment-option.none-option');
+                            if (noneOptionEl) {
+                                noneOptionEl.classList.remove('selected');
+                                noneOptionEl.querySelector('input').checked = false;
+                            }
                         } else {
-                            // 移除選中樣式
                             this.classList.remove('selected');
+                            // 如果取消選中後沒有任何其他PDF被選中，則自動選中"無附件"
+                            const anyPdfSelected = Array.from(document.querySelectorAll('.attachment-option:not(.none-option) input[type="checkbox"]'))
+                                .some(el => el.checked);
                             
-                            // 檢查是否沒有任何PDF被選中，如果是，則自動選中"無附件"
-                            const anySelected = Array.from(document.querySelectorAll('.attachment-option:not(:first-child)')).some(el => 
-                                el.querySelector('input').checked
-                            );
-                            
-                            if (!anySelected) {
-                                const noneOption = document.querySelector('.attachment-option:first-child');
-                                if (noneOption) {
-                                    noneOption.classList.add('selected');
-                                    noneOption.querySelector('input').checked = true;
+                            if (!anyPdfSelected) {
+                                const noneOptionEl = document.querySelector('.attachment-option.none-option');
+                                if (noneOptionEl) {
+                                    noneOptionEl.classList.add('selected');
+                                    noneOptionEl.querySelector('input').checked = true;
                                 }
                             }
                         }
@@ -609,73 +596,70 @@ async function loadDriveFiles() {
 
 // 處理選擇的檔案
 async function processSelectedFile() {
-    // 獲取選中的音訊檔案
     const selectedFile = document.querySelector('input[name="audioFile"]:checked');
     if (!selectedFile) {
         showError('請先選擇一個音訊檔案');
         return;
     }
     
-    // 獲取選中的附件檔案（只支援單一PDF選擇）
-    let attachmentFileId = null;
-    let attachmentFileName = null;
+    const attachmentFileIds = [];
+    const attachmentFileNames = [];
     if (elements.attachmentList) {
-        const checked = document.querySelector('.attachment-option:not(.none-option) input[type="checkbox"]:checked');
-        if (checked) {
-            attachmentFileId = checked.value;
-            attachmentFileName = checked.getAttribute('data-filename');
-        }
+        const checkedAttachments = document.querySelectorAll('.attachment-option:not(.none-option) input[type="checkbox"]:checked');
+        checkedAttachments.forEach(chk => {
+            attachmentFileIds.push(chk.value);
+            attachmentFileNames.push(chk.getAttribute('data-filename'));
+        });
     }
     
     const fileId = selectedFile.value;
     const fileName = selectedFile.getAttribute('data-filename');
-    
-    // 禁用按鈕，顯示處理進度
+
     elements.processBtn.disabled = true;
     elements.processBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 處理中...';
     
     try {
-        // 提交處理請求（只傳單一 attachment_file_id）
+        const requestBody = {
+            file_id: fileId,
+        };
+        if (attachmentFileIds.length > 0) {
+            requestBody.attachment_file_ids = attachmentFileIds;
+        }
+
         const response = await fetch(`${API_BASE_URL}/process`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-                file_id: fileId,
-                ...(attachmentFileId ? { attachment_file_id: attachmentFileId } : {})
-            })
+            body: JSON.stringify(requestBody)
         });
         
         if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+            const errorData = await response.json().catch(() => ({})); // Try to parse error
+            throw new Error(`HTTP error ${response.status}: ${errorData.error || response.statusText}`);
         }
         
         const data = await response.json();
         
         if (data.success) {
-            // 顯示處理進度區域
             elements.progressContainer.classList.remove('d-none');
             elements.resultContainer.classList.add('d-none');
             
-            // 設置文件名稱顯示
             const fileInfo = `處理檔案: ${fileName}`;
-            const attachmentInfo = attachmentFileName ? ` (附件: ${attachmentFileName})` : '';
+            const attachmentInfo = attachmentFileNames.length > 0 ? ` (附件: ${attachmentFileNames.join(', ')})` : '';
             elements.processingStatus.innerHTML = `<i class="bi bi-cpu me-2"></i>${fileInfo}${attachmentInfo}`;
             
-            // 啟動狀態檢查
             currentJobId = data.job_id;
             checkJobStatus(data.job_id);
             
-            // 顯示成功消息
             showSuccess('檔案處理已開始，請稍候...');
         } else {
-            showError(data.message || '處理請求失敗');
+            showError(data.error || data.message || '處理請求失敗');
             resetProcessButton();
         }
     } catch (error) {
         console.error('處理請求失敗:', error);
-        showError('處理請求失敗。請稍後再試。');
+        showError(`處理請求失敗: ${error.message || '請稍後再試。'}`);
         resetProcessButton();
     }
 }

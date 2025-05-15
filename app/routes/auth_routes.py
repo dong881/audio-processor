@@ -62,9 +62,10 @@ def auth_google():
                 redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
                 logging.info(f"使用環境變數設定的外部URL: {redirect_uri}")
             else:
-                # 如果正在使用Docker內部地址，則使用配置的外部地址
-                redirect_uri = "http://localhost:5000/api/auth/callback"
-                logging.info(f"使用硬編碼的外部URL: {redirect_uri}")
+                # 如果正在使用Docker內部地址且EXTERNAL_URL未設定，則使用預期的外部地址
+                # 這應該與 client_secret.json 和 Google Cloud Console 中的 URI 之一匹配。
+                redirect_uri = "https://audio-processor.ddns.net/api/auth/callback"
+                logging.info(f"使用硬編碼的預期外部URL: {redirect_uri}")
             
         logging.info(f"🔄 OAuth 重定向 URI: {redirect_uri}")
         
@@ -171,13 +172,24 @@ def auth_callback():
         
         redirect_uri = session.get('redirect_uri')
         if not redirect_uri:
-            redirect_uri = request.url_root.rstrip('/') + '/api/auth/callback'
-            if 'localhost' in redirect_uri or '0.0.0.0' in redirect_uri or '127.0.0.1' in redirect_uri:
+            # 如果 session 中沒有 redirect_uri，則重新構造它
+            # 這段邏輯應該與 auth_google 中的邏輯保持一致
+            current_url_root = request.url_root # 獲取當前的根 URL
+            base_redirect_uri = current_url_root.rstrip('/') + '/api/auth/callback'
+            
+            if 'localhost' in base_redirect_uri or '0.0.0.0' in base_redirect_uri or '127.0.0.1' in base_redirect_uri:
                 external_url = os.getenv("EXTERNAL_URL")
                 if external_url:
                     redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
+                    logging.info(f"回調中：使用環境變數EXTERNAL_URL設定的重定向URI: {redirect_uri}")
                 else:
-                    redirect_uri = "http://localhost:5000/api/auth/callback"
+                    # 如果EXTERNAL_URL未設定，且是本地請求，則預設為預期的公開URI
+                    redirect_uri = "https://audio-processor.ddns.net/api/auth/callback"
+                    logging.info(f"回調中：使用硬編碼的預期外部URL: {redirect_uri}")
+            else:
+                # 如果不是本地請求，則直接使用基於請求的URL
+                redirect_uri = base_redirect_uri
+                logging.info(f"回調中：使用基於請求的重定向URI: {redirect_uri}")
         
         logging.info(f"🔄 重建 OAuth 流程，使用重定向 URI: {redirect_uri}")
         
@@ -385,7 +397,21 @@ def auth_status():
                         
                         # 檢查憑證是否過期，需要刷新
                         if processor.oauth_credentials.expired and processor.oauth_credentials.refresh_token:
+                            logging.info("🔄 OAuth憑證已過期，嘗試刷新...")
                             processor.oauth_credentials.refresh(request_session)
+                            logging.info("✅ OAuth憑證刷新成功")
+                            # 將刷新後的憑證更新回 session
+                            session['credentials'] = {
+                                'token': processor.oauth_credentials.token,
+                                'refresh_token': processor.oauth_credentials.refresh_token,
+                                'token_uri': processor.oauth_credentials.token_uri,
+                                'client_id': processor.oauth_credentials.client_id,
+                                'client_secret': processor.oauth_credentials.client_secret,
+                                'scopes': processor.oauth_credentials.scopes,
+                                'id_token': processor.oauth_credentials.id_token if hasattr(processor.oauth_credentials, 'id_token') else None
+                            }
+                            session.modified = True # 確保 Flask 儲存 session 的變更
+                            logging.info("✅ 已將刷新後的憑證更新回 session")
                         
                         # 獲取用戶資訊 - 首先嘗試從id_token中取得
                         user = None

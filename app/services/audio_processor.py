@@ -144,6 +144,41 @@ class AudioProcessor:
             self.oauth_drive_service = None
             return False
 
+    def download_file(self, file_id: str, target_dir: str) -> str: # Returns filename
+        """從 Google Drive 下載檔案到指定的目標目錄 (使用服務帳號)"""
+        logging.info(f"🔄 從 Google Drive 下載檔案 (ID: {file_id}) 到目錄 {target_dir}")
+        
+        try:
+            if not self.drive_service:
+                raise RuntimeError("服務帳號 Drive API 未初始化，無法下載檔案")
+            
+            # Ensure target_dir exists
+            os.makedirs(target_dir, exist_ok=True)
+            
+            file_meta = self.drive_service.files().get(
+                fileId=file_id, fields="name,mimeType"
+            ).execute()
+            
+            raw_file_name = file_meta.get('name', f"file_{file_id}")
+            safe_file_name = re.sub(r'[\\/*?:"<>|]', "_", raw_file_name)
+            local_path = os.path.join(target_dir, safe_file_name)
+            
+            request_obj = self.drive_service.files().get_media(fileId=file_id)
+            
+            with open(local_path, 'wb') as f:
+                downloader = MediaIoBaseDownload(f, request_obj)
+                done = False
+                while not done:
+                    status, done = downloader.next_chunk()
+                    # logging.debug(f"下載進度: {int(status.progress() * 100)}%") # Can be verbose
+            
+            logging.info(f"✅ 檔案下載完成: {safe_file_name} (儲存於 {target_dir})")
+            return safe_file_name # Return just the filename
+            
+        except Exception as e:
+            logging.error(f"❌ 下載檔案 ID {file_id} 到 {target_dir} 失敗: {str(e)}")
+            raise
+
     def download_from_drive(self, file_id: str) -> Tuple[str, str]:
         """從 Google Drive 下載檔案到臨時目錄 (使用服務帳號)"""
         logging.info(f"🔄 從 Google Drive 下載檔案 (ID: {file_id})")
@@ -1104,20 +1139,12 @@ class AudioProcessor:
         logging.info(f"✅ 音檔處理完成，共 {len(segments)} 個段落")
         return transcript_full, segments, list(original_speakers)
 
-    def _process_file_job(self, job_id: str, file_id: str, attachment_file_id: Optional[str] = None):
+    def _process_file_job(self, job_id: str, file_id: str, attachment_file_ids: Optional[List[str]] = None):
         """後台處理音頻檔案的工作函數 (在線程中執行)"""
-        audio_temp_dir = None
-        attachment_temp_dir = None
-        attachment_text = None
-        summary_data = None
-        speaker_map = {}
-        original_filename = None
-
-        # 更新工作狀態為處理中
-        with self.jobs_lock:
-            self.jobs[job_id]['status'] = JOB_STATUS['PROCESSING']
-            self.jobs[job_id]['progress'] = 5
-            self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+        main_temp_dir = None
+        attachments_temp_dir = None
+        downloaded_pdf_paths = []
+        context_summary = ""
 
         try:
             logging.info(f"[Job {job_id}] 開始處理 file_id: {file_id}")
@@ -1139,8 +1166,13 @@ class AudioProcessor:
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
             
             # 處理附件 (如果有)
-            if attachment_file_id:
-                attachment_text, attachment_temp_dir = self.download_and_extract_text(attachment_file_id)
+            if attachment_file_ids:
+                attachment_texts = []
+                for attachment_file_id in attachment_file_ids:
+                    attachment_text, attachment_temp_dir = self.download_and_extract_text(attachment_file_id)
+                    attachment_texts.append(attachment_text)
+                    if attachment_temp_dir:
+                        attachments_temp_dir = attachment_temp_dir
             
             # 更新進度: 20%
             with self.jobs_lock:
@@ -1187,7 +1219,7 @@ class AudioProcessor:
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
             
             # 生成摘要
-            summary_data = self.generate_summary(transcript_for_summary, attachment_text)
+            summary_data = self.generate_summary(transcript_for_summary, attachment_texts[0] if attachment_texts else None)
             title = summary_data["title"]
             summary = summary_data["summary"]
             todos = summary_data["todos"]
@@ -1273,11 +1305,11 @@ class AudioProcessor:
             if audio_temp_dir and os.path.exists(audio_temp_dir):
                 logging.info(f"[Job {job_id}] 🧹 清理音檔臨時目錄")
                 shutil.rmtree(audio_temp_dir)
-            if attachment_temp_dir and os.path.exists(attachment_temp_dir):
+            if attachments_temp_dir and os.path.exists(attachments_temp_dir):
                 logging.info(f"[Job {job_id}] 🧹 清理附件臨時目錄")
-                shutil.rmtree(attachment_temp_dir)
+                shutil.rmtree(attachments_temp_dir)
 
-    def process_file_async(self, file_id: str, attachment_file_id: Optional[str] = None) -> str:
+    def process_file_async(self, file_id: str, attachment_file_ids: Optional[List[str]] = None) -> str:
         """非同步處理檔案，返回工作 ID"""
         # 生成唯一工作 ID
         job_id = str(uuid.uuid4())
@@ -1287,7 +1319,7 @@ class AudioProcessor:
             self.jobs[job_id] = {
                 'id': job_id,
                 'file_id': file_id,
-                'attachment_file_id': attachment_file_id,
+                'attachment_file_ids': attachment_file_ids,
                 'status': JOB_STATUS['PENDING'],
                 'progress': 0,
                 'created_at': datetime.now().isoformat(),
@@ -1298,7 +1330,7 @@ class AudioProcessor:
         
         # 提交工作到線程池
         self.executor.submit(
-            self._process_file_job, job_id, file_id, attachment_file_id
+            self._process_file_job, job_id, file_id, attachment_file_ids
         )
         
         return job_id
@@ -1339,3 +1371,27 @@ class AudioProcessor:
                 'created_at': job['created_at'],
                 'updated_at': job['updated_at']
             }
+
+    def update_job_progress(self, job_id: str, progress: int, message: str, status: Optional[str] = None, error: Optional[str] = None, result_url: Optional[str] = None, notion_page_id: Optional[str] = None):
+        """更新指定工作的進度、狀態、訊息、錯誤和結果URL"""
+        with self.jobs_lock:
+            if job_id in self.jobs:
+                self.jobs[job_id]['progress'] = progress
+                self.jobs[job_id]['message'] = message
+                self.jobs[job_id]['last_updated'] = datetime.utcnow().isoformat() + 'Z'
+                if status:
+                    self.jobs[job_id]['status'] = status
+                if error:
+                    self.jobs[job_id]['error'] = error
+                if result_url: # Notion page URL or other result link
+                    self.jobs[job_id]['result_url'] = result_url
+                if notion_page_id:
+                    self.jobs[job_id]['notion_page_id'] = notion_page_id
+                
+                # 如果狀態是完成或失敗，記錄完成時間
+                if status in [JOB_STATUS['COMPLETED'], JOB_STATUS['FAILED']]:
+                    self.jobs[job_id]['completed_at'] = datetime.utcnow().isoformat() + 'Z'
+                    
+                logging.info(f"📊 工作進度更新 - ID: {job_id}, 狀態: {self.jobs[job_id]['status']}, 進度: {progress}%, 訊息: {message}")
+            else:
+                logging.warning(f"⚠️ 嘗試更新不存在的工作 ID: {job_id}")

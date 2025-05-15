@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime
-from flask import Blueprint, request, jsonify, session
+from flask import Blueprint, request, jsonify, session, current_app
 from app.utils.constants import JOB_STATUS
 
 # 建立藍圖
@@ -42,20 +42,21 @@ def process_audio_endpoint():
             return jsonify({"success": False, "error": "無效的請求內容"}), 400
 
         file_id = data.get('file_id')
-        
-        # attachment_file_id 支援單一 PDF
-        attachment_file_id = None
-        if 'attachment_file_id' in data:
-            attachment_file_id = data['attachment_file_id']
-        elif 'attachment_file_ids' in data and isinstance(data['attachment_file_ids'], list) and data['attachment_file_ids']:
-            # 只取第一個 PDF
-            attachment_file_id = data['attachment_file_ids'][0]
-
         if not file_id:
             return jsonify({"success": False, "error": "缺少 file_id 參數"}), 400
 
+        attachment_file_ids = data.get('attachment_file_ids')  # Expect a list
+
+        if attachment_file_ids is not None:
+            if not isinstance(attachment_file_ids, list):
+                return jsonify({'success': False, 'error': 'attachment_file_ids must be a list'}), 400
+            if not all(isinstance(item, str) for item in attachment_file_ids):
+                return jsonify({'success': False, 'error': 'All items in attachment_file_ids must be strings'}), 400
+            if not attachment_file_ids:  # Treat empty list as no attachments
+                attachment_file_ids = None
+
         # 提交工作
-        job_id = processor.process_file_async(file_id, attachment_file_id=attachment_file_id)
+        job_id = processor.process_file_async(file_id, attachment_file_ids=attachment_file_ids)
         
         # 立即返回工作ID
         return jsonify({

@@ -75,26 +75,29 @@ sequenceDiagram
 
 ### New Functions
 
-#### `process_file_async(file_id, attachment_file_id)`
+#### `process_file_async(file_id, attachment_file_ids)`
 
 *   **Purpose:** Creates an asynchronous job for file processing and returns a job ID.
-*   **Input:** `file_id` (string), `attachment_file_id` (optional string).
+*   **Input:** `file_id` (string), `attachment_file_ids` (optional list of strings).
 *   **Process:**
     1.  Generates a unique job ID using `uuid.uuid4()`.
     2.  Creates a job entry with initial status "pending" and stores it in the `jobs` dictionary.
-    3.  Submits the `_process_file_job` function to the thread pool with the job ID and file IDs.
+    3.  Submits the `_process_file_job` function to the thread pool with the job ID, file ID, and list of attachment IDs.
 *   **Output:** `job_id` (string) - A unique ID for tracking the job.
 *   **Error Handling:** Any exceptions are caught in the API endpoint and returned as errors.
 
-#### `_process_file_job(job_id, file_id, attachment_file_id)`
+#### `_process_file_job(job_id, file_id, attachment_file_ids)`
 
 *   **Purpose:** Background worker function that processes the audio file and updates job status.
-*   **Input:** `job_id` (string), `file_id` (string), `attachment_file_id` (optional string).
+*   **Input:** `job_id` (string), `file_id` (string), `attachment_file_ids` (optional list of strings).
 *   **Process:**
     1.  Updates job status to "processing" and sets progress to 5%.
-    2.  Processes the file with regular status updates at key milestones.
-    3.  Upon completion, updates job status to "completed" and stores result.
-    4.  If an error occurs, updates job status to "failed" and stores error information.
+    2.  Downloads the main audio file.
+    3.  If `attachment_file_ids` are provided, downloads each PDF attachment.
+    4.  Extracts context from downloaded PDFs and aggregates it.
+    5.  Processes the file with regular status updates at key milestones.
+    6.  Upon completion, updates job status to "completed" and stores result.
+    7.  If an error occurs, updates job status to "failed" and stores error information.
 *   **Output:** Result dictionary (not directly returned but stored in job record).
 *   **Error Handling:** Catches all exceptions, logs them, and updates job status to "failed".
 
@@ -198,7 +201,7 @@ sequenceDiagram
 ### `/process` (POST)
 
 *   **Purpose:** Submits a file for asynchronous processing.
-*   **Input:** JSON with `file_id` and optional `attachment_file_id`.
+*   **Input:** JSON with `file_id` and optional `attachment_file_ids` (list of strings).
 *   **Process:**
     1.  Validates the input parameters.
     2.  Creates an async job by calling `process_file_async`.

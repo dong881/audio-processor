@@ -22,13 +22,13 @@ Initiates asynchronous processing of an audio file stored in Google Drive.
 ```json
 {
   "file_id": "YOUR_GOOGLE_DRIVE_AUDIO_FILE_ID",
-  "attachment_file_id": "OPTIONAL_GOOGLE_DRIVE_PDF_FILE_ID"
+  "attachment_file_ids": ["OPTIONAL_GOOGLE_DRIVE_PDF_FILE_ID_1", "OPTIONAL_GOOGLE_DRIVE_PDF_FILE_ID_2"]
 }
 ```
 
 **Parameters:**
 - `file_id` (required): Google Drive file ID of the audio file to process
-- `attachment_file_id` (optional): Google Drive file ID of a PDF document to provide additional context for summarization
+- `attachment_file_ids` (optional): A list of Google Drive file IDs for PDF documents to provide additional context for summarization.
 
 **Response:**
 ```json
