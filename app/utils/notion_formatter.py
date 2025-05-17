@@ -197,17 +197,29 @@ class NotionFormatter:
             
             # 處理項目符號列表 (- * +)
             elif line.startswith('-') or line.startswith('*') or line.startswith('+'):
-                content = line[1:].strip()
-                # 應用行內格式化處理 - 修復此處不支援格式化的問題
-                rich_text_content = self.process_inline_formatting(content)
-                
-                blocks.append({
-                    "object": "block",
-                    "type": "bulleted_list_item",
-                    "bulleted_list_item": {
-                        "rich_text": rich_text_content
-                    }
-                })
+                # 檢查是否為粗體文本而不是列表項
+                if line.startswith('*') and '**' in line:
+                    # 處理粗體文本
+                    rich_text_content = self.process_inline_formatting(line)
+                    blocks.append({
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {
+                            "rich_text": rich_text_content
+                        }
+                    })
+                else:
+                    content = line[1:].strip()
+                    # 應用行內格式化處理
+                    rich_text_content = self.process_inline_formatting(content)
+                    
+                    blocks.append({
+                        "object": "block",
+                        "type": "bulleted_list_item",
+                        "bulleted_list_item": {
+                            "rich_text": rich_text_content
+                        }
+                    })
                 
             # 處理水平線
             elif line == '---' or line == '***' or line == '___':
