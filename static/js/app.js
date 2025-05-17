@@ -5,6 +5,8 @@ let activeJobsTimer = null;
 let currentJobId = null;
 let jobStatusTimer = null;
 let redirectBlocked = false; // 防止循環跳轉的標記
+let lastActiveJobsData = null; // 用於存儲上一次的任務數據
+let activeJobsUpdateTimeout = null; // 用於防抖動
 
 // Add global variables for folder filtering
 let recordingsFilterEnabled = false;
@@ -221,8 +223,7 @@ async function checkAuthStatus() {
         
         if (!response.ok) {
             console.error(`認證狀態檢查失敗，錯誤碼: ${response.status}`);
-            // Do not call showUnauthenticatedUI here directly, let initApp handle it based on return value
-            return false;
+            return null;
         }
         
         const data = await response.json();
@@ -231,23 +232,25 @@ async function checkAuthStatus() {
             // 如果用戶資訊未知但已認證，則嘗試刷新用戶資訊
             if (data.user && (data.user.id === "unknown" || !data.user.email)) {
                 console.log("已認證但用戶資訊不完整，嘗試刷新用戶資訊...");
-                await refreshUserInfo();
+                const refreshed = await refreshUserInfo();
+                if (refreshed) {
+                    return data.user;
+                }
             }
             
-            return true;
+            return data.user;
         } else {
-            return false;
+            return null;
         }
     } catch (error) {
         console.error('檢查認證狀態時出錯:', error);
-        return false;
+        return null;
     }
 }
 
 // 新增函數：刷新用戶資訊
 async function refreshUserInfo() {
     try {
-        // 修正 API 路徑，確保使用正確的路徑
         const response = await fetch(`${API_BASE_URL}/api/auth/userinfo`);
         
         if (!response.ok) {
@@ -683,9 +686,27 @@ async function checkJobStatus(jobId) {
         if (response.status === 404) {
             // 檢查是否為當前正在處理的任務
             if (currentJobId === jobId) {
-                console.warn(`任務 ${jobId} 暫時無法獲取狀態，將繼續嘗試...`);
-                // 繼續檢查狀態，而不是立即顯示錯誤
-                jobStatusTimer = setTimeout(() => checkJobStatus(jobId), 2000);
+                // 增加重試次數限制
+                if (!job.retryCount) {
+                    job.retryCount = 1;
+                } else {
+                    job.retryCount++;
+                }
+                
+                // 如果重試次數超過5次，則認為任務已失效
+                if (job.retryCount > 5) {
+                    console.error(`任務 ${jobId} 重試次數過多，認為任務已失效`);
+                    showError(`任務狀態檢查失敗，請重新提交處理請求`);
+                    resetProcessButton();
+                    clearTimeout(jobStatusTimer);
+                    currentJobId = null;
+                    return;
+                }
+                
+                console.warn(`任務 ${jobId} 暫時無法獲取狀態，第 ${job.retryCount} 次重試...`);
+                // 使用指數退避策略增加重試間隔
+                const retryDelay = Math.min(2000 * Math.pow(2, job.retryCount - 1), 30000);
+                jobStatusTimer = setTimeout(() => checkJobStatus(jobId), retryDelay);
                 return;
             } else {
                 console.error(`任務 ${jobId} 不存在，可能已過期或被刪除`);
@@ -705,6 +726,9 @@ async function checkJobStatus(jobId) {
         
         if (data.success && data.job) {
             const job = data.job;
+            
+            // 重置重試計數
+            job.retryCount = 0;
             
             // 更新進度條
             elements.processingBar.style.width = `${job.progress}%`;
@@ -739,8 +763,27 @@ async function checkJobStatus(jobId) {
         console.error('檢查任務狀態失敗:', error);
         // 如果是當前正在處理的任務，繼續嘗試
         if (currentJobId === jobId) {
+            // 增加重試次數限制
+            if (!job.retryCount) {
+                job.retryCount = 1;
+            } else {
+                job.retryCount++;
+            }
+            
+            // 如果重試次數超過5次，則認為任務已失效
+            if (job.retryCount > 5) {
+                console.error(`任務 ${jobId} 重試次數過多，認為任務已失效`);
+                showError(`任務狀態檢查失敗，請重新提交處理請求`);
+                resetProcessButton();
+                clearTimeout(jobStatusTimer);
+                currentJobId = null;
+                return;
+            }
+            
             console.warn('任務狀態檢查失敗，將繼續嘗試...');
-            jobStatusTimer = setTimeout(() => checkJobStatus(jobId), 2000);
+            // 使用指數退避策略增加重試間隔
+            const retryDelay = Math.min(2000 * Math.pow(2, job.retryCount - 1), 30000);
+            jobStatusTimer = setTimeout(() => checkJobStatus(jobId), retryDelay);
         } else {
             showError(`檢查任務狀態失敗: ${error.message}`);
             resetProcessButton();
@@ -836,8 +879,8 @@ function startActiveJobsPolling() {
     // 先取得一次活躍任務
     fetchActiveJobs();
     
-    // 設定定時器，每 10 秒更新一次
-    activeJobsTimer = setInterval(fetchActiveJobs, 10000);
+    // 設定定時器，每 2 秒更新一次
+    activeJobsTimer = setInterval(fetchActiveJobs, 2000);
 }
 
 // 停止輪詢活躍任務
@@ -854,34 +897,51 @@ async function fetchActiveJobs() {
         const response = await fetch(`${API_BASE_URL}/jobs?filter=active`);
         
         if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+            // 如果是 404 或其他錯誤，不要立即更新 UI，而是保持當前狀態
+            console.warn(`獲取活躍任務失敗，狀態碼: ${response.status}，保持當前狀態`);
+            return;
         }
         
         const data = await response.json();
         
         if (data.success) {
-            // 更新活躍任務按鈕顯示
-            const activeJobsCount = Object.keys(data.active_jobs || {}).length;
+            // 檢查數據是否真的發生變化
+            const currentJobsData = JSON.stringify(data.active_jobs || {});
+            if (currentJobsData === lastActiveJobsData) {
+                return; // 如果數據沒有變化，不更新 UI
+            }
+            lastActiveJobsData = currentJobsData;
             
-            if (elements.showActiveJobsBtn) {
-                if (activeJobsCount > 0) {
-                    elements.showActiveJobsBtn.textContent = `活躍任務 (${activeJobsCount})`;
-                    elements.showActiveJobsBtn.classList.remove('btn-outline-secondary');
-                    elements.showActiveJobsBtn.classList.add('btn-outline-primary');
-                } else {
-                    elements.showActiveJobsBtn.textContent = '活躍任務';
-                    elements.showActiveJobsBtn.classList.remove('btn-outline-primary');
-                    elements.showActiveJobsBtn.classList.add('btn-outline-secondary');
+            // 使用防抖動更新 UI
+            if (activeJobsUpdateTimeout) {
+                clearTimeout(activeJobsUpdateTimeout);
+            }
+            
+            activeJobsUpdateTimeout = setTimeout(() => {
+                // 更新活躍任務按鈕顯示
+                const activeJobsCount = Object.keys(data.active_jobs || {}).length;
+                
+                if (elements.showActiveJobsBtn) {
+                    // 只有在數量真正改變時才更新按鈕文字
+                    const currentText = elements.showActiveJobsBtn.textContent;
+                    const newText = activeJobsCount > 0 ? `活躍任務 (${activeJobsCount})` : '活躍任務';
+                    
+                    if (currentText !== newText) {
+                        elements.showActiveJobsBtn.textContent = newText;
+                        elements.showActiveJobsBtn.classList.toggle('btn-outline-primary', activeJobsCount > 0);
+                        elements.showActiveJobsBtn.classList.toggle('btn-outline-secondary', activeJobsCount === 0);
+                    }
                 }
-            }
-            
-            // 更新任務列表（如果已顯示）
-            if (!elements.jobsList.classList.contains('d-none')) {
-                updateJobsList(data.active_jobs || {});
-            }
+                
+                // 更新任務列表（如果已顯示）
+                if (!elements.jobsList.classList.contains('d-none')) {
+                    updateJobsList(data.active_jobs || {});
+                }
+            }, 300); // 300ms 的防抖動延遲
         }
     } catch (error) {
         console.error('獲取活躍任務失敗:', error);
+        // 發生錯誤時不更新 UI，保持當前狀態
     }
 }
 
@@ -889,11 +949,21 @@ async function fetchActiveJobs() {
 function updateJobsList(jobs) {
     if (!elements.jobsList) return;
     
-    elements.jobsList.innerHTML = '';
-    
     const jobIds = Object.keys(jobs);
     
+    // 如果沒有任務，且當前列表為空，則不進行任何更新
+    if (jobIds.length === 0 && elements.jobsList.querySelector('.alert-info')) {
+        return;
+    }
+    
+    // 如果沒有任務，顯示提示訊息
     if (jobIds.length === 0) {
+        // 檢查是否已經顯示了相同的提示訊息
+        const existingAlert = elements.jobsList.querySelector('.alert-info');
+        if (existingAlert && existingAlert.textContent.includes('目前沒有活躍的任務')) {
+            return;
+        }
+        
         elements.jobsList.innerHTML = `
             <div class="alert alert-info">
                 <i class="bi bi-info-circle-fill me-2"></i> 
@@ -902,11 +972,15 @@ function updateJobsList(jobs) {
         return;
     }
     
+    // 創建新的容器來存放更新後的內容
+    const newContent = document.createElement('div');
+    
     // 為每個任務創建卡片
     jobIds.forEach(jobId => {
         const job = jobs[jobId];
         const card = document.createElement('div');
         card.className = 'card mb-3';
+        card.id = `job-card-${jobId}`; // 添加唯一ID
         
         // 根據任務狀態設置卡片顏色
         let statusBadge = '';
@@ -924,7 +998,7 @@ function updateJobsList(jobs) {
         const createdTime = new Date(job.created_at).toLocaleString();
         const updatedTime = new Date(job.updated_at).toLocaleString();
         
-        card.innerHTML = `
+        const cardContent = `
             <div class="card-body">
                 <h5 class="card-title">${statusIcon} 任務 ${statusBadge}</h5>
                 <div class="progress mb-3">
@@ -943,8 +1017,25 @@ function updateJobsList(jobs) {
             </div>
         `;
         
-        elements.jobsList.appendChild(card);
+        // 檢查是否存在相同的卡片
+        const existingCard = document.getElementById(`job-card-${jobId}`);
+        if (existingCard) {
+            // 如果卡片存在，只更新內容
+            existingCard.innerHTML = cardContent;
+        } else {
+            // 如果卡片不存在，創建新的卡片
+            card.innerHTML = cardContent;
+            newContent.appendChild(card);
+        }
     });
+    
+    // 如果沒有新的卡片需要添加，直接返回
+    if (newContent.children.length === 0) {
+        return;
+    }
+    
+    // 一次性更新 DOM，減少閃爍
+    elements.jobsList.appendChild(newContent);
 }
 
 // 切換顯示/隱藏活躍任務列表

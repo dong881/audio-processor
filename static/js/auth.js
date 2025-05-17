@@ -150,56 +150,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
     
-    // Retry mechanism for auth status check
-    let retryCount = 0;
-    const maxRetries = 3;
-    
-    async function checkAuthWithRetry() {
-        try {
-            const user = await checkAuthStatus();
-            if (user) {
-                // 顯示已認證用戶界面
-                if (typeof showAuthenticatedUI === 'function') {
-                    showAuthenticatedUI(user);
-                }
-                
-                // 更新用戶信息UI
-                updateUserInfoUI(user);
-                
-                // 如果在登入頁面但已經驗證，則跳轉到主頁
-                if (window.location.pathname.includes('/login')) {
-                    // 檢查是否已經嘗試過跳轉，避免無限循環
-                    const redirectAttempted = sessionStorage.getItem('main_redirect_attempted');
-                    if (!redirectAttempted) {
-                        sessionStorage.setItem('main_redirect_attempted', 'true');
-                        window.location.href = '/';
-                    }
-                }
-            } else {
-                if (!window.location.pathname.includes('/login')) {
-                    // 在非登入頁面檢測到未驗證，跳轉到登入頁面
-                    const redirectAttempted = sessionStorage.getItem('login_redirect_attempted');
-                    if (!redirectAttempted) {
-                        sessionStorage.setItem('login_redirect_attempted', 'true');
-                        window.location.href = '/login';
-                    }
-                }
-            }
-        } catch (error) {
-            console.error(`檢查認證狀態失敗 (嘗試 ${retryCount + 1}/${maxRetries}):`, error);
-            if (retryCount < maxRetries) {
-                retryCount++;
-                setTimeout(checkAuthWithRetry, 1000); // 1秒後重試
-            }
+    // 立即檢查認證狀態
+    const user = await checkAuthStatus();
+    if (user) {
+        // 顯示已認證用戶界面
+        if (typeof showAuthenticatedUI === 'function') {
+            showAuthenticatedUI(user);
+        }
+        
+        // 更新用戶信息UI
+        updateUserInfoUI(user);
+        
+        // 如果在登入頁面但已經驗證，則跳轉到主頁
+        if (window.location.pathname.includes('/login')) {
+            window.location.href = '/';
+        }
+    } else {
+        if (!window.location.pathname.includes('/login')) {
+            // 在非登入頁面檢測到未驗證，跳轉到登入頁面
+            window.location.href = '/login';
         }
     }
-    
-    // Start auth check with retry mechanism
-    checkAuthWithRetry();
-    
-    // 清理重定向標記 - 確保30秒後重設，避免永久鎖定
-    setTimeout(() => {
-        sessionStorage.removeItem('login_redirect_attempted');
-        sessionStorage.removeItem('main_redirect_attempted');
-    }, 30000);
 });
