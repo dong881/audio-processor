@@ -681,12 +681,20 @@ async function checkJobStatus(jobId) {
         
         // 先檢查狀態碼，再解析JSON
         if (response.status === 404) {
-            console.error(`任務 ${jobId} 不存在，可能已過期或被刪除`);
-            showError(`任務不存在或已過期，請重新提交處理請求`);
-            resetProcessButton();
-            clearTimeout(jobStatusTimer);
-            currentJobId = null;
-            return;
+            // 檢查是否為當前正在處理的任務
+            if (currentJobId === jobId) {
+                console.warn(`任務 ${jobId} 暫時無法獲取狀態，將繼續嘗試...`);
+                // 繼續檢查狀態，而不是立即顯示錯誤
+                jobStatusTimer = setTimeout(() => checkJobStatus(jobId), 2000);
+                return;
+            } else {
+                console.error(`任務 ${jobId} 不存在，可能已過期或被刪除`);
+                showError(`任務不存在或已過期，請重新提交處理請求`);
+                resetProcessButton();
+                clearTimeout(jobStatusTimer);
+                currentJobId = null;
+                return;
+            }
         }
         
         const data = await response.json();
@@ -729,10 +737,16 @@ async function checkJobStatus(jobId) {
         }
     } catch (error) {
         console.error('檢查任務狀態失敗:', error);
-        showError(`檢查任務狀態失敗: ${error.message}`);
-        resetProcessButton();
-        clearTimeout(jobStatusTimer);
-        currentJobId = null;
+        // 如果是當前正在處理的任務，繼續嘗試
+        if (currentJobId === jobId) {
+            console.warn('任務狀態檢查失敗，將繼續嘗試...');
+            jobStatusTimer = setTimeout(() => checkJobStatus(jobId), 2000);
+        } else {
+            showError(`檢查任務狀態失敗: ${error.message}`);
+            resetProcessButton();
+            clearTimeout(jobStatusTimer);
+            currentJobId = null;
+        }
     }
 }
 

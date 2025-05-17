@@ -479,7 +479,9 @@ class AudioProcessor:
         
         try:
             # 使用更詳細的Markdown格式指示
-            system_prompt = """將錄音逐字稿整理成筆記內容，請使用Markdown格式直接輸出筆記內容:
+            system_prompt = """
+            你具備電子工程通訊相關背景，能夠理解技術性內容(包括一些常聽到的socket, RIC, gNB, nFAPI, OAI等術語)。
+            將錄音逐字稿整理成筆記內容，請使用Markdown格式直接輸出筆記內容:
             避免使用```markdown```，直接輸出Markdown格式的筆記內容。
             """
 
@@ -982,6 +984,7 @@ class AudioProcessor:
             
             system_prompt = """
             你是一位會議記錄專家，專長於分析會議內容並產生重點摘要。
+            同時你具備電子工程通訊相關背景，能夠理解技術性內容(包括一些常聽到的socket, RIC, gNB, nFAPI, OAI等術語)。
             請分析以下會議記錄，並提供:
             1. 一個簡短且清晰的會議標題
             2. 一段簡潔的會議摘要 (約200-300字)
