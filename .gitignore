@@ -1,2 +1,12 @@
 .env
 credentials
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Log files
+*.log
+
+# Data directory
+data/
