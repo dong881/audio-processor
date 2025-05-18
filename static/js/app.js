@@ -1,22 +1,31 @@
 // 全局變數
-const API_BASE_URL = '';  // 空字串表示相對路徑
+const API_BASE_URL = '/api';
+const RECORDINGS_FOLDER = 'WearNote_Recordings';
+const DOCUMENTS_FOLDER = 'WearNote_Recordings/Documents';
+const MAX_RETRY_COUNT = 5;
+const INITIAL_RETRY_DELAY = 1000; // 初始重試延遲
+const MAX_RETRY_DELAY = 30000; // 最大重試延遲
+const POLLING_INTERVAL = 2000;
+const MAX_POLLING_INTERVAL = 10000; // 最大輪詢間隔
+
 let googleAuthInitialized = false;
 let activeJobsTimer = null;
 let currentJobId = null;
 let jobStatusTimer = null;
-let redirectBlocked = false; // 防止循環跳轉的標記
-let lastActiveJobsData = null; // 用於存儲上一次的任務數據
-let activeJobsUpdateTimeout = null; // 用於防抖動
+let redirectBlocked = false;
+let lastActiveJobsData = null;
+let activeJobsUpdateTimeout = null;
+let recordingsFilterEnabled = true;
+let pdfFilterEnabled = true;
+let currentPollingInterval = POLLING_INTERVAL;
 
-// Add global variables for folder filtering
-let recordingsFilterEnabled = false;
-let pdfFilterEnabled = false;
-const RECORDINGS_FOLDER = 'WearNote_Recordings';
-const DOCUMENTS_FOLDER = 'WearNote_Recordings/Documents';
+// 任務列表更新相關
+let jobUpdateInterval = null;
+let lastUpdateTime = null;
+const UPDATE_INTERVAL = 2000; // 2秒更新一次
 
 // DOM 元素快取
 const elements = {
-    // 主UI元素
     fileList: document.getElementById('file-list'),
     attachmentList: document.getElementById('attachment-list'),
     progressContainer: document.getElementById('progress-container'),
@@ -25,27 +34,20 @@ const elements = {
     resultContainer: document.getElementById('result-container'),
     authSection: document.getElementById('auth-section'),
     processingSection: document.getElementById('processing-section'),
-    // 支援多個登入按鈕元素 (同時支援 login-button 和 login-btn)
     loginButtons: [
         document.getElementById('login-button'),
         document.getElementById('login-btn')
-    ].filter(Boolean), // 過濾掉不存在的元素
+    ].filter(Boolean),
     logoutButton: document.getElementById('logout-button'),
-
-    // 操作按鈕
     refreshFilesBtn: document.getElementById('refresh-files-btn'),
     processBtn: document.getElementById('process-btn'),
     showActiveJobsBtn: document.getElementById('show-active-jobs-btn'),
-    
-    // 結果顯示區
     jobsList: document.getElementById('jobs-list'),
     resultTitle: document.getElementById('result-title'),
     resultSummary: document.getElementById('result-summary'),
     resultTodos: document.getElementById('result-todos'),
     resultLink: document.getElementById('result-link'),
     resultSpeakers: document.getElementById('result-speakers'),
-    
-    // 進度指示
     progressPercentage: document.getElementById('progress-percentage'),
 };
 
@@ -53,150 +55,84 @@ const elements = {
 document.addEventListener('DOMContentLoaded', () => {
     initApp();
     setupEventListeners();
+    initializeFilters();
+    startJobUpdates();
 });
 
 // 初始化應用程式
-function initApp() {
-    // 檢查用戶認證狀態
-    checkAuthStatus()
-        .then(isAuthenticated => {
-            if (isAuthenticated) {
-                showAuthenticatedUI();
-                // 只有在已認證的情況下才載入檔案
-                loadDriveFiles();
-                startActiveJobsPolling();
-            } else {
-                // 未認證用戶將顯示未認證的UI
-                showUnauthenticatedUI();
-            }
-        })
-        .catch(error => {
-            console.error('認證檢查失敗:', error);
+async function initApp() {
+    try {
+        const isAuthenticated = await checkAuthStatus();
+        if (isAuthenticated) {
+            showAuthenticatedUI();
+            await loadDriveFiles();
+            startActiveJobsPolling();
+        } else {
             showUnauthenticatedUI();
-        });
+        }
+    } catch (error) {
+        console.error('初始化失敗:', error);
+        showUnauthenticatedUI();
+    }
 }
 
 // 設置事件監聽器
 function setupEventListeners() {
-    // 登入/登出按鈕
-    if (elements.loginButtons.length > 0) {
-        elements.loginButtons.forEach(button => {
-            button.addEventListener('click', handleLogin);
-        });
-    }
-    
-    if (elements.logoutButton) {
-        elements.logoutButton.addEventListener('click', handleLogout);
-    }
-    
-    // 刷新文件列表按鈕
-    if (elements.refreshFilesBtn) {
-        elements.refreshFilesBtn.addEventListener('click', function() {
-            const refreshIcon = document.getElementById('refresh-icon');
-            if (refreshIcon) {
-                refreshIcon.classList.add('rotating');
-                
-                // 1秒後移除動畫類，避免下次點擊時動畫不生效
-                setTimeout(() => {
-                    refreshIcon.classList.remove('rotating');
-                }, 1000);
-            }
-            loadDriveFiles();
-        });
-    }
-    
-    // 處理檔案按鈕
-    if (elements.processBtn) {
-        elements.processBtn.addEventListener('click', processSelectedFile);
-    }
-    
-    // 顯示活躍任務按鈕
-    if (elements.showActiveJobsBtn) {
-        elements.showActiveJobsBtn.addEventListener('click', toggleActiveJobs);
-    }
+    elements.loginButtons.forEach(button => button?.addEventListener('click', handleLogin));
+    elements.logoutButton?.addEventListener('click', handleLogout);
+    elements.refreshFilesBtn?.addEventListener('click', handleRefreshFiles);
+    elements.processBtn?.addEventListener('click', processSelectedFile);
+    elements.showActiveJobsBtn?.addEventListener('click', toggleActiveJobs);
+    setupFilterToggles();
+    initializeTooltips();
+}
 
-    // 錄音資料夾過濾切換開關
+// 初始化過濾器
+function initializeFilters() {
+    recordingsFilterEnabled = localStorage.getItem('filter-recordings-enabled') !== 'false';
+    pdfFilterEnabled = localStorage.getItem('filter-pdf-enabled') !== 'false';
+}
+
+// 設置過濾器開關
+function setupFilterToggles() {
     const recordingsFilterToggle = document.getElementById('filter-recordings-toggle');
-    if (recordingsFilterToggle) {
-        // 載入保存的偏好設置或設置為預設開啟
-        const recordingsSavedPreference = localStorage.getItem('filter-recordings-enabled');
-        if (recordingsSavedPreference === null) {
-            recordingsFilterEnabled = true; // Default to true
-            localStorage.setItem('filter-recordings-enabled', 'true'); // Save default
-        } else {
-            recordingsFilterEnabled = (recordingsSavedPreference === 'true');
-        }
-        recordingsFilterToggle.checked = recordingsFilterEnabled;
-        
-        // 更新視覺效果
-        if (recordingsFilterEnabled) {
-            const toggleTrack = recordingsFilterToggle.nextElementSibling.querySelector('.toggle-track');
-            if (toggleTrack) toggleTrack.classList.add('active');
-        }
-        
-        recordingsFilterToggle.addEventListener('change', function(e) {
-            recordingsFilterEnabled = e.target.checked;
-            
-            // 提供視覺反饋
-            const toggleLabel = this.nextElementSibling;
-            if (toggleLabel) {
-                toggleLabel.classList.add('pulse');
-                setTimeout(() => toggleLabel.classList.remove('pulse'), 300);
-            }
-            
-            // 保存偏好設置
-            localStorage.setItem('filter-recordings-enabled', recordingsFilterEnabled);
-            
-            // 使用更新的過濾設置重新載入檔案
-            loadDriveFiles();
-        });
-    }
-    
-    // PDF資料夾過濾切換開關
     const pdfFilterToggle = document.getElementById('filter-pdf-toggle');
-    if (pdfFilterToggle) {
-        // 載入保存的偏好設置或設置為預設開啟
-        const pdfSavedPreference = localStorage.getItem('filter-pdf-enabled');
-        if (pdfSavedPreference === null) {
-            pdfFilterEnabled = true; // Default to true
-            localStorage.setItem('filter-pdf-enabled', 'true'); // Save default
-        } else {
-            pdfFilterEnabled = (pdfSavedPreference === 'true');
-        }
-        pdfFilterToggle.checked = pdfFilterEnabled;
-        
-        // 更新視覺效果
-        if (pdfFilterEnabled) {
-            const toggleTrack = pdfFilterToggle.nextElementSibling.querySelector('.toggle-track');
-            if (toggleTrack) toggleTrack.classList.add('active');
-        }
-        
-        pdfFilterToggle.addEventListener('change', function(e) {
-            pdfFilterEnabled = e.target.checked;
-            
-            // 提供視覺反饋
-            const toggleLabel = this.nextElementSibling;
-            if (toggleLabel) {
-                toggleLabel.classList.add('pulse');
-                setTimeout(() => toggleLabel.classList.remove('pulse'), 300);
-            }
-            
-            // 保存偏好設置
-            localStorage.setItem('filter-pdf-enabled', pdfFilterEnabled);
-            
-            // 使用更新的過濾設置重新載入檔案
-            loadDriveFiles();
-        });
+
+    if (recordingsFilterToggle) {
+        recordingsFilterToggle.checked = recordingsFilterEnabled;
+        recordingsFilterToggle.addEventListener('change', e => handleFilterChange(e, 'recordings'));
     }
 
-    // Initialize tooltips with updated options
-    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    if (pdfFilterToggle) {
+        pdfFilterToggle.checked = pdfFilterEnabled;
+        pdfFilterToggle.addEventListener('change', e => handleFilterChange(e, 'pdf'));
+    }
+}
+
+// 處理過濾器變更
+function handleFilterChange(event, type) {
+    const isEnabled = event.target.checked;
+    const storageKey = `filter-${type}-enabled`;
+    
+    if (type === 'recordings') {
+        recordingsFilterEnabled = isEnabled;
+    } else {
+        pdfFilterEnabled = isEnabled;
+    }
+    
+    localStorage.setItem(storageKey, isEnabled);
+    loadDriveFiles();
+}
+
+// 初始化工具提示
+function initializeTooltips() {
+    const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]');
     if (typeof bootstrap !== 'undefined') {
-        tooltipTriggerList.forEach(function(tooltipTriggerEl) {
-            new bootstrap.Tooltip(tooltipTriggerEl, {
+        tooltipTriggerList.forEach(el => {
+            new bootstrap.Tooltip(el, {
                 animation: true,
                 trigger: 'hover focus',
-                boundary: document.body, // 添加邊界設定以修復滾動問題
+                boundary: document.body,
                 popperConfig: {
                     modifiers: [{
                         name: 'preventOverflow',
@@ -208,81 +144,63 @@ function setupEventListeners() {
                 }
             });
         });
-    } else {
-        console.warn('Bootstrap JavaScript is not loaded. Tooltips will not work.');
     }
 }
 
-// ===== 認證相關函數 =====
+// 處理刷新文件
+async function handleRefreshFiles() {
+    const refreshIcon = document.getElementById('refresh-icon');
+    if (refreshIcon) {
+        refreshIcon.classList.add('rotating');
+        setTimeout(() => refreshIcon.classList.remove('rotating'), 1000);
+    }
+    await loadDriveFiles();
+}
 
-// 檢查用戶認證狀態
+// 檢查認證狀態
 async function checkAuthStatus() {
     try {
-        // 使用正確的 API 路徑
-        const response = await fetch(`${API_BASE_URL}/api/auth/status`);
-        
-        if (!response.ok) {
-            console.error(`認證狀態檢查失敗，錯誤碼: ${response.status}`);
-            return null;
-        }
+        const response = await fetch(`${API_BASE_URL}/auth/status`);
+        if (!response.ok) return null;
         
         const data = await response.json();
-        
-        if (data.authenticated) {
-            // 如果用戶資訊未知但已認證，則嘗試刷新用戶資訊
-            if (data.user && (data.user.id === "unknown" || !data.user.email)) {
-                console.log("已認證但用戶資訊不完整，嘗試刷新用戶資訊...");
-                const refreshed = await refreshUserInfo();
-                if (refreshed) {
-                    return data.user;
-                }
-            }
-            
-            return data.user;
-        } else {
-            return null;
+        if (data.authenticated && (!data.user || data.user.id === "unknown")) {
+            return await refreshUserInfo();
         }
+        return data.user;
     } catch (error) {
-        console.error('檢查認證狀態時出錯:', error);
+        console.error('認證檢查失敗:', error);
         return null;
     }
 }
 
-// 新增函數：刷新用戶資訊
+// 刷新用戶資訊
 async function refreshUserInfo() {
     try {
-        const response = await fetch(`${API_BASE_URL}/api/auth/userinfo`);
-        
-        if (!response.ok) {
-            console.error(`刷新用戶資訊失敗，錯誤碼: ${response.status}`);
-            return false;
-        }
+        const response = await fetch(`${API_BASE_URL}/auth/userinfo`);
+        if (!response.ok) return false;
         
         const userData = await response.json();
-        
         if (userData.success && userData.user) {
-            console.log("成功刷新用戶資訊:", userData.user);
             showAuthenticatedUI(userData.user);
             return true;
-        } else {
-            console.warn("刷新用戶資訊失敗", userData.error || "未知錯誤");
-            return false;
         }
+        return false;
     } catch (error) {
-        console.error('刷新用戶資訊時出錯:', error);
+        console.error('刷新用戶資訊失敗:', error);
         return false;
     }
 }
 
 // 處理登入
 function handleLogin() {
-    window.location.href = `${API_BASE_URL}/api/auth/google`;
+    window.location.href = `${API_BASE_URL}/auth/google`;
 }
 
 // 處理登出
 async function handleLogout() {
     try {
-        await fetch(`${API_BASE_URL}/api/auth/logout`);
+        await fetch(`${API_BASE_URL}/auth/logout`);
         window.location.reload();
     } catch (error) {
         console.error('登出失敗:', error);
@@ -290,128 +208,87 @@ async function handleLogout() {
     }
 }
 
-// ===== UI 顯示相關函數 =====
-
-// 顯示錯誤訊息 - 持續顯示直到被替換
+// 顯示錯誤訊息
 function showError(message) {
-    // 先移除所有現有的提示訊息
     removeAllAlerts();
-    
-    const errorAlert = document.createElement('div');
-    errorAlert.className = 'alert alert-danger alert-dismissible fade show persistent-alert';
-    errorAlert.innerHTML = `
-        <i class="bi bi-exclamation-triangle-fill me-2"></i>
-        ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-    `;
-    
-    // 添加到頁面頂部
+    const errorAlert = createAlert('danger', message);
     document.body.insertBefore(errorAlert, document.body.firstChild);
-    
-    // 不再自動消失
 }
 
-// 顯示成功訊息 - 持續顯示直到被替換
+// 顯示成功訊息
 function showSuccess(message) {
-    // 先移除所有現有的提示訊息
     removeAllAlerts();
-    
-    const successAlert = document.createElement('div');
-    successAlert.className = 'alert alert-success alert-dismissible fade show persistent-alert';
-    successAlert.innerHTML = `
-        <i class="bi bi-check-circle-fill me-2"></i>
+    const successAlert = createAlert('success', message);
+    document.body.insertBefore(successAlert, document.body.firstChild);
+}
+
+// 創建提示訊息
+function createAlert(type, message) {
+    const alert = document.createElement('div');
+    alert.className = `alert alert-${type} alert-dismissible fade show persistent-alert`;
+    alert.innerHTML = `
+        <i class="bi bi-${type === 'danger' ? 'exclamation-triangle' : 'check-circle'}-fill me-2"></i>
         ${message}
         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     `;
-    
-    // 添加到頁面頂部
-    document.body.insertBefore(successAlert, document.body.firstChild);
-    
-    // 不再自動消失
+    return alert;
 }
 
 // 移除所有提示訊息
 function removeAllAlerts() {
-    document.querySelectorAll('.persistent-alert').forEach(alert => {
-        alert.remove();
-    });
+    document.querySelectorAll('.persistent-alert').forEach(alert => alert.remove());
 }
 
 // 顯示已認證用戶界面
-function showAuthenticatedUI() {
-    if (elements.authSection) elements.authSection.classList.add('d-none');
-    if (elements.processingSection) elements.processingSection.classList.remove('d-none');
-    if (elements.loginButtons.length > 0) {
-        elements.loginButtons.forEach(button => {
-            button.classList.add('d-none');
-        });
+function showAuthenticatedUI(userInfo) {
+    elements.authSection?.classList.add('d-none');
+    elements.processingSection?.classList.remove('d-none');
+    elements.loginButtons.forEach(button => button?.classList.add('d-none'));
+    elements.logoutButton?.classList.remove('d-none');
+
+    const userProfileCard = document.getElementById('user-profile-card');
+    if (userProfileCard && userInfo) {
+        userProfileCard.innerHTML = `
+            <div class="d-flex align-items-center">
+                <img src="${userInfo.picture || '/static/img/default-avatar.png'}" 
+                     alt="${userInfo.name || 'User'}" 
+                     class="rounded-circle me-2" 
+                     style="width: 32px; height: 32px;">
+                <div>
+                    <div class="fw-bold">${userInfo.name || 'User'}</div>
+                    <div class="small text-muted">${userInfo.email || ''}</div>
+                </div>
+            </div>
+        `;
     }
-    if (elements.logoutButton) elements.logoutButton.classList.remove('d-none');
 }
 
 // 顯示未認證用戶界面
 function showUnauthenticatedUI() {
-    // This function will now only update the UI.
-    // Redirection to /login will be handled by auth.js
-    console.log('app.js: User not authenticated. UI updated for unauthenticated state. Redirection handled by auth.js if necessary.');
-    
-    // UI updates for unauthenticated state
-    if (elements.authSection) elements.authSection.classList.remove('d-none');
-    if (elements.processingSection) elements.processingSection.classList.add('d-none');
-    if (elements.loginButtons.length > 0) {
-        elements.loginButtons.forEach(button => {
-            button.classList.remove('d-none');
-        });
-    }
-    if (elements.logoutButton) elements.logoutButton.classList.add('d-none');
-}
-
-// ===== Google Drive 檔案操作 =====
-
-// 取得指定名稱的資料夾ID（假設已經有一份所有資料夾的列表，或需先查詢一次）
-async function getFolderIdByName(folderName) {
-    const response = await fetch(`${API_BASE_URL}/drive/files?folderOnly=true`);
-    const data = await response.json();
-    if (data.success) {
-        const folder = data.files.find(f => f.name === folderName && f.mimeType === 'application/vnd.google-apps.folder');
-        return folder ? folder.id : null;
-    }
-    return null;
+    elements.authSection?.classList.remove('d-none');
+    elements.processingSection?.classList.add('d-none');
+    elements.loginButtons.forEach(button => button?.classList.remove('d-none'));
+    elements.logoutButton?.classList.add('d-none');
 }
 
 // 載入 Google Drive 檔案
 async function loadDriveFiles() {
-    const fileList = document.getElementById('file-list');
-    if (!fileList) return;
+    if (!elements.fileList) return;
     
     try {
-        // 檢查是否已認證，未認證則不繼續載入
         const authStatus = await checkAuthStatus();
         if (!authStatus) {
             showUnauthenticatedUI();
             return;
         }
         
-        if (elements.fileList) {
-            elements.fileList.innerHTML = `
-                <div class="text-center">
-                    <div class="spinner-border" role="status"></div> 
-                    <p class="mt-3">正在載入您的檔案...</p>
-                </div>`;
-        }
+        showLoadingState();
         
-        if (elements.attachmentList) {
-            elements.attachmentList.innerHTML = `
-                <div class="text-center">
-                    <div class="spinner-border" role="status"></div> 
-                    <p class="mt-3">正在載入您的附件...</p>
-                </div>`;
-        }
-
         const queryParams = new URLSearchParams({
             recordingsFilter: recordingsFilterEnabled ? 'enabled' : 'disabled',
             pdfFilter: pdfFilterEnabled ? 'enabled' : 'disabled'
         });
+        
         if (recordingsFilterEnabled) {
             queryParams.append('recordingsFolderName', RECORDINGS_FOLDER);
         }
@@ -420,180 +297,198 @@ async function loadDriveFiles() {
         }
         
         const response = await fetch(`${API_BASE_URL}/drive/files?${queryParams.toString()}`);
-        
-        if (!response.ok) {
-            if (response.status === 401) {
-                // For 401, throw an error that specifically indicates this,
-                // so the catch block can identify it.
-                throw new Error(`401 Unauthorized: Failed to load Drive files. Session may be invalid.`);
-            }
-            throw new Error(`HTTP error ${response.status}: Failed to load Drive files.`);
-        }
+        if (!response.ok) throw new Error(`HTTP error ${response.status}`);
         
         const data = await response.json();
+        updateFileLists(data.files);
         
-        // 分離音訊檔案和PDF檔案
-        let audioFiles = data.files.filter(file => isAudioFile(file.mimeType));
-        let pdfFiles = data.files.filter(file => file.mimeType === 'application/pdf');
-        
-        console.log("過濾前總音訊檔案:", audioFiles.length);
-        console.log("過濾前總PDF檔案:", pdfFiles.length);
-        
-        // 填充音訊文件列表
-        if (elements.fileList) {
-            if (audioFiles.length === 0) {
-                elements.fileList.innerHTML = `
-                    <div class="alert alert-info">
-                        <i class="bi bi-info-circle-fill me-2"></i>
-                        ${recordingsFilterEnabled ? 
-                            `未在 ${RECORDINGS_FOLDER} 資料夾中找到音訊檔案。請上傳音訊檔案到此資料夾。` : 
-                            '未找到音訊檔案。請上傳音訊檔案到您的 Google Drive.'}
-                    </div>`;
-            } else {
-                elements.fileList.innerHTML = '';
-                audioFiles.forEach(file => {
-                    const option = document.createElement('div');
-                    option.className = 'file-option';
-                    option.innerHTML = `
-                        <input type="radio" name="audioFile" 
-                               id="file-${file.id}" value="${file.id}" data-filename="${file.name}">
-                        <div class="file-icon">
-                            <i class="bi bi-file-earmark-music"></i>
-                        </div>
-                        <div class="file-details">
-                            <div class="file-name">${file.name}</div>
-                            <div class="file-size">${formatFileSize(file.size)}</div>
-                        </div>
-                    `;
-                    // 點擊整個區域時選中
-                    option.addEventListener('click', function() {
-                        const input = this.querySelector('input');
-                        input.checked = true;
-                        
-                        // 移除其他選擇項的選中樣式
-                        document.querySelectorAll('.file-option').forEach(el => {
-                            el.classList.remove('selected');
-                        });
-                        
-                        // 添加選中樣式
-                        this.classList.add('selected');
-                    });
-                    elements.fileList.appendChild(option);
-                });
-            }
-        }
-        
-        // 填充附件文件列表
-        if (elements.attachmentList) {
-            if (pdfFiles.length === 0) {
-                elements.attachmentList.innerHTML = `
-                    <div class="alert alert-info">
-                        <i class="bi bi-info-circle-fill me-2" style="font-size: 1.5rem;"></i>
-                        ${pdfFilterEnabled ? 
-                            `未在 ${DOCUMENTS_FOLDER} 資料夾中找到 PDF 檔案。附件是選用的。` : 
-                            '未找到 PDF 檔案。附件是選用的。'}
-                    </div>`;
-            } else {
-                elements.attachmentList.innerHTML = '';
-                // 添加"無附件"選項
-                const noneOption = document.createElement('div');
-                noneOption.className = 'attachment-option none-option selected'; // Default selected
-                noneOption.innerHTML = `
-                    <input type="checkbox" id="attachment-none" value="" data-none="true" checked>
-                    <div class="file-icon">
-                        <i class="bi bi-slash-circle"></i>
-                    </div>
-                    <div class="file-details">
-                        <div class="file-name">無附件</div>
-                        <div class="file-size">不選擇附件檔案</div>
-                    </div>
-                `;
-                
-                noneOption.addEventListener('click', function() {
-                    const input = this.querySelector('input');
-                    input.checked = true; // Clicking "None" always selects it
-                    this.classList.add('selected');
-                    
-                    // 取消所有其他附件的選擇
-                    document.querySelectorAll('.attachment-option:not(.none-option)').forEach(el => {
-                        el.classList.remove('selected');
-                        el.querySelector('input').checked = false;
-                    });
-                });
-                elements.attachmentList.appendChild(noneOption);
-                
-                // 添加PDF檔案
-                pdfFiles.forEach(file => {
-                    const option = document.createElement('div');
-                    option.className = 'attachment-option';
-                    option.innerHTML = `
-                        <input type="checkbox" 
-                               id="attachment-${file.id}" value="${file.id}" data-filename="${file.name}">
-                        <div class="file-icon">
-                            <i class="bi bi-file-earmark-pdf"></i>
-                        </div>
-                        <div class="file-details">
-                            <div class="file-name">${file.name}</div>
-                            <div class="file-size">${formatFileSize(file.size)}</div>
-                        </div>
-                    `;
-                    
-                    option.addEventListener('click', function() {
-                        const input = this.querySelector('input');
-                        input.checked = !input.checked; // Toggle current PDF's checked state
-                        
-                        if (input.checked) {
-                            this.classList.add('selected');
-                            // 選中了一個PDF附件，取消"無附件"的選擇
-                            const noneOptionEl = document.querySelector('.attachment-option.none-option');
-                            if (noneOptionEl) {
-                                noneOptionEl.classList.remove('selected');
-                                noneOptionEl.querySelector('input').checked = false;
-                            }
-                        } else {
-                            this.classList.remove('selected');
-                            // 如果取消選中後沒有任何其他PDF被選中，則自動選中"無附件"
-                            const anyPdfSelected = Array.from(document.querySelectorAll('.attachment-option:not(.none-option) input[type="checkbox"]'))
-                                .some(el => el.checked);
-                            
-                            if (!anyPdfSelected) {
-                                const noneOptionEl = document.querySelector('.attachment-option.none-option');
-                                if (noneOptionEl) {
-                                    noneOptionEl.classList.add('selected');
-                                    noneOptionEl.querySelector('input').checked = true;
-                                }
-                            }
-                        }
-                    });
-                    elements.attachmentList.appendChild(option);
-                });
-            }
-        }
     } catch (error) {
         console.error('載入檔案失敗:', error);
+        showFileLoadError(error);
+    }
+}
+
+// 顯示載入狀態
+function showLoadingState() {
+    const loadingHTML = `
+        <div class="text-center">
+            <div class="spinner-border" role="status"></div> 
+            <p class="mt-3">正在載入您的檔案...</p>
+        </div>`;
+    
+    elements.fileList.innerHTML = loadingHTML;
+    if (elements.attachmentList) {
+        elements.attachmentList.innerHTML = loadingHTML;
+    }
+}
+
+// 更新檔案列表
+function updateFileLists(files) {
+    const audioFiles = files.filter(file => isAudioFile(file.mimeType));
+    const pdfFiles = files.filter(file => file.mimeType === 'application/pdf');
+    
+    updateAudioFileList(audioFiles);
+    updateAttachmentList(pdfFiles);
+}
+
+// 更新音訊檔案列表
+function updateAudioFileList(audioFiles) {
+    if (!elements.fileList) return;
+    
+    if (audioFiles.length === 0) {
+        elements.fileList.innerHTML = `
+            <div class="alert alert-info">
+                <i class="bi bi-info-circle-fill me-2"></i>
+                ${recordingsFilterEnabled ? 
+                    `未在 ${RECORDINGS_FOLDER} 資料夾中找到音訊檔案。請上傳音訊檔案到此資料夾。` : 
+                    '未找到音訊檔案。請上傳音訊檔案到您的 Google Drive.'}
+            </div>`;
+        return;
+    }
+    
+    elements.fileList.innerHTML = '';
+    audioFiles.forEach(file => {
+        const option = createFileOption(file, 'audio');
+        elements.fileList.appendChild(option);
+    });
+}
+
+// 更新附件列表
+function updateAttachmentList(pdfFiles) {
+    if (!elements.attachmentList) return;
+    
+    if (pdfFiles.length === 0) {
+        elements.attachmentList.innerHTML = `
+            <div class="alert alert-info">
+                <i class="bi bi-info-circle-fill me-2"></i>
+                ${pdfFilterEnabled ? 
+                    `未在 ${DOCUMENTS_FOLDER} 資料夾中找到 PDF 檔案。附件是選用的。` : 
+                    '未找到 PDF 檔案。附件是選用的。'}
+            </div>`;
+        return;
+    }
+    
+    elements.attachmentList.innerHTML = '';
+    const noneOption = createNoneOption();
+    elements.attachmentList.appendChild(noneOption);
+    
+    pdfFiles.forEach(file => {
+        const option = createFileOption(file, 'pdf');
+        elements.attachmentList.appendChild(option);
+    });
+}
+
+// 創建檔案選項
+function createFileOption(file, type) {
+    const option = document.createElement('div');
+    option.className = `${type === 'audio' ? 'file' : 'attachment'}-option`;
+    
+    const inputType = type === 'audio' ? 'radio' : 'checkbox';
+    const iconClass = type === 'audio' ? 'file-earmark-music' : 'file-earmark-pdf';
+    
+    option.innerHTML = `
+        <input type="${inputType}" 
+               name="${type === 'audio' ? 'audioFile' : 'attachment'}" 
+               id="${type}-${file.id}" 
+               value="${file.id}" 
+               data-filename="${file.name}">
+        <div class="file-icon">
+            <i class="bi bi-${iconClass}"></i>
+        </div>
+        <div class="file-details">
+            <div class="file-name">${file.name}</div>
+            <div class="file-size">${formatFileSize(file.size)}</div>
+        </div>
+    `;
+    
+    option.addEventListener('click', () => handleFileOptionClick(option, type));
+    return option;
+}
+
+// 創建無附件選項
+function createNoneOption() {
+    const option = document.createElement('div');
+    option.className = 'attachment-option none-option selected';
+    option.innerHTML = `
+        <input type="checkbox" id="attachment-none" value="" data-none="true" checked>
+        <div class="file-icon">
+            <i class="bi bi-slash-circle"></i>
+        </div>
+        <div class="file-details">
+            <div class="file-name">無附件</div>
+            <div class="file-size">不選擇附件檔案</div>
+        </div>
+    `;
+    
+    option.addEventListener('click', handleNoneOptionClick);
+    return option;
+}
+
+// 處理檔案選項點擊
+function handleFileOptionClick(option, type) {
+    const input = option.querySelector('input');
+    const isAudio = type === 'audio';
+    
+    if (isAudio) {
+        document.querySelectorAll('.file-option').forEach(el => el.classList.remove('selected'));
+        input.checked = true;
+        option.classList.add('selected');
+    } else {
+        input.checked = !input.checked;
+        option.classList.toggle('selected', input.checked);
         
-        let displayErrorMessage = error.message || '載入檔案失敗。請重試。';
+        if (input.checked) {
+            const noneOption = document.querySelector('.attachment-option.none-option');
+            if (noneOption) {
+                noneOption.classList.remove('selected');
+                noneOption.querySelector('input').checked = false;
+            }
+        } else {
+            const anyPdfSelected = Array.from(document.querySelectorAll('.attachment-option:not(.none-option) input[type="checkbox"]'))
+                .some(el => el.checked);
+            
+            if (!anyPdfSelected) {
+                const noneOption = document.querySelector('.attachment-option.none-option');
+                if (noneOption) {
+                    noneOption.classList.add('selected');
+                    noneOption.querySelector('input').checked = true;
+                }
+            }
+        }
+    }
+}
 
-        if (error.message && error.message.startsWith('401 Unauthorized')) {
-            // Specific handling for the 401 error from this fetch
-            displayErrorMessage = '載入 Google Drive 檔案失敗，您的登入可能已失效。請嘗試重新登入。';
-            showUnauthenticatedUI(); // Revert to unauthenticated UI
-        }
+// 處理無附件選項點擊
+function handleNoneOptionClick() {
+    const input = this.querySelector('input');
+    input.checked = true;
+    this.classList.add('selected');
+    
+    document.querySelectorAll('.attachment-option:not(.none-option)').forEach(el => {
+        el.classList.remove('selected');
+        el.querySelector('input').checked = false;
+    });
+}
 
-        if (elements.fileList) {
-            elements.fileList.innerHTML = `
-                <div class="alert alert-danger">
-                    <i class="bi bi-exclamation-triangle-fill me-2" style="font-size: 1.5rem;"></i>
-                    ${displayErrorMessage}
-                </div>`;
-        }
-        if (elements.attachmentList) {
-            elements.attachmentList.innerHTML = `
-                <div class="alert alert-danger">
-                    <i class="bi bi-exclamation-triangle-fill me-2" style="font-size: 1.5rem;"></i>
-                    ${displayErrorMessage}
-                </div>`;
-        }
+// 顯示檔案載入錯誤
+function showFileLoadError(error) {
+    const displayErrorMessage = error.message?.startsWith('401') ?
+        '載入 Google Drive 檔案失敗，您的登入可能已失效。請嘗試重新登入。' :
+        '載入檔案失敗。請重試。';
+    
+    const errorHTML = `
+        <div class="alert alert-danger">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            ${displayErrorMessage}
+        </div>`;
+    
+    elements.fileList.innerHTML = errorHTML;
+    if (elements.attachmentList) {
+        elements.attachmentList.innerHTML = errorHTML;
+    }
+    
+    if (error.message?.startsWith('401')) {
+        showUnauthenticatedUI();
     }
 }
 
@@ -607,6 +502,7 @@ async function processSelectedFile() {
     
     const attachmentFileIds = [];
     const attachmentFileNames = [];
+    
     if (elements.attachmentList) {
         const checkedAttachments = document.querySelectorAll('.attachment-option:not(.none-option) input[type="checkbox"]:checked');
         checkedAttachments.forEach(chk => {
@@ -617,40 +513,44 @@ async function processSelectedFile() {
     
     const fileId = selectedFile.value;
     const fileName = selectedFile.getAttribute('data-filename');
-
-    elements.processBtn.disabled = true;
-    elements.processBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 處理中...';
+    
+    if (elements.processBtn) {
+        elements.processBtn.disabled = true;
+        elements.processBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 處理中...';
+    }
     
     try {
         const requestBody = {
             file_id: fileId,
+            ...(attachmentFileIds.length > 0 && { attachment_file_ids: attachmentFileIds })
         };
-        if (attachmentFileIds.length > 0) {
-            requestBody.attachment_file_ids = attachmentFileIds;
-        }
-
+        
         const response = await fetch(`${API_BASE_URL}/process`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestBody)
         });
         
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({})); // Try to parse error
+            const errorData = await response.json().catch(() => ({}));
             throw new Error(`HTTP error ${response.status}: ${errorData.error || response.statusText}`);
         }
         
         const data = await response.json();
         
         if (data.success) {
-            elements.progressContainer.classList.remove('d-none');
-            elements.resultContainer.classList.add('d-none');
+            if (elements.progressContainer) {
+                elements.progressContainer.classList.remove('d-none');
+            }
+            if (elements.resultContainer) {
+                elements.resultContainer.classList.add('d-none');
+            }
             
             const fileInfo = `處理檔案: ${fileName}`;
             const attachmentInfo = attachmentFileNames.length > 0 ? ` (附件: ${attachmentFileNames.join(', ')})` : '';
-            elements.processingStatus.innerHTML = `<i class="bi bi-cpu me-2"></i>${fileInfo}${attachmentInfo}`;
+            if (elements.processingStatus) {
+                elements.processingStatus.innerHTML = `<i class="bi bi-cpu me-2"></i>${fileInfo}${attachmentInfo}`;
+            }
             
             currentJobId = data.job_id;
             checkJobStatus(data.job_id);
@@ -675,45 +575,40 @@ function resetProcessButton() {
     }
 }
 
-// ===== 任務狀態管理 =====
-
 // 檢查任務狀態
 async function checkJobStatus(jobId) {
+    if (!window.activeJobs) {
+        window.activeJobs = new Map();
+    }
+    
+    let job = window.activeJobs.get(jobId) || {
+        retryCount: 0,
+        lastError: null,
+        lastErrorTime: null,
+        lastStatus: null,
+        lastProgress: 0
+    };
+    
     try {
         const response = await fetch(`${API_BASE_URL}/job/${jobId}`);
         
-        // 先檢查狀態碼，再解析JSON
         if (response.status === 404) {
-            // 檢查是否為當前正在處理的任務
             if (currentJobId === jobId) {
-                // 增加重試次數限制
-                if (!job.retryCount) {
-                    job.retryCount = 1;
-                } else {
-                    job.retryCount++;
-                }
+                job.retryCount++;
+                job.lastError = '404 Not Found';
+                job.lastErrorTime = Date.now();
                 
-                // 如果重試次數超過5次，則認為任務已失效
-                if (job.retryCount > 5) {
-                    console.error(`任務 ${jobId} 重試次數過多，認為任務已失效`);
-                    showError(`任務狀態檢查失敗，請重新提交處理請求`);
-                    resetProcessButton();
-                    clearTimeout(jobStatusTimer);
-                    currentJobId = null;
+                if (job.retryCount > MAX_RETRY_COUNT) {
+                    handleJobError(jobId, '任務重試次數過多，認為任務已失效');
                     return;
                 }
                 
+                const retryDelay = Math.min(RETRY_DELAY * Math.pow(2, job.retryCount - 1), 30000);
                 console.warn(`任務 ${jobId} 暫時無法獲取狀態，第 ${job.retryCount} 次重試...`);
-                // 使用指數退避策略增加重試間隔
-                const retryDelay = Math.min(2000 * Math.pow(2, job.retryCount - 1), 30000);
                 jobStatusTimer = setTimeout(() => checkJobStatus(jobId), retryDelay);
                 return;
             } else {
-                console.error(`任務 ${jobId} 不存在，可能已過期或被刪除`);
-                showError(`任務不存在或已過期，請重新提交處理請求`);
-                resetProcessButton();
-                clearTimeout(jobStatusTimer);
-                currentJobId = null;
+                window.activeJobs.delete(jobId);
                 return;
             }
         }
@@ -725,86 +620,78 @@ async function checkJobStatus(jobId) {
         }
         
         if (data.success && data.job) {
-            const job = data.job;
-            
-            // 重置重試計數
-            job.retryCount = 0;
-            
-            // 更新進度條
-            elements.processingBar.style.width = `${job.progress}%`;
-            elements.processingBar.setAttribute('aria-valuenow', job.progress);
-            elements.progressPercentage.textContent = `${job.progress}%`;
-            
-            // 更新狀態訊息
-            if (job.message) {
-                elements.processingStatus.textContent = job.message;
-            }
-            
-            // 檢查任務狀態
-            if (job.status === 'completed') {
-                jobCompleted(job);
-                clearTimeout(jobStatusTimer);
-                currentJobId = null;
-            } else if (job.status === 'failed') {
-                jobFailed(job);
-                clearTimeout(jobStatusTimer);
-                currentJobId = null;
-            } else {
-                // 任務尚未完成，繼續檢查狀態
-                jobStatusTimer = setTimeout(() => checkJobStatus(jobId), 2000);
-            }
+            handleJobUpdate(jobId, data.job);
         } else {
-            showError(data.message || '獲取任務狀態失敗');
-            resetProcessButton();
-            clearTimeout(jobStatusTimer);
-            currentJobId = null;
+            handleJobError(jobId, data.message || '獲取任務狀態失敗');
         }
     } catch (error) {
         console.error('檢查任務狀態失敗:', error);
-        // 如果是當前正在處理的任務，繼續嘗試
-        if (currentJobId === jobId) {
-            // 增加重試次數限制
-            if (!job.retryCount) {
-                job.retryCount = 1;
-            } else {
-                job.retryCount++;
-            }
-            
-            // 如果重試次數超過5次，則認為任務已失效
-            if (job.retryCount > 5) {
-                console.error(`任務 ${jobId} 重試次數過多，認為任務已失效`);
-                showError(`任務狀態檢查失敗，請重新提交處理請求`);
-                resetProcessButton();
-                clearTimeout(jobStatusTimer);
-                currentJobId = null;
-                return;
-            }
-            
-            console.warn('任務狀態檢查失敗，將繼續嘗試...');
-            // 使用指數退避策略增加重試間隔
-            const retryDelay = Math.min(2000 * Math.pow(2, job.retryCount - 1), 30000);
-            jobStatusTimer = setTimeout(() => checkJobStatus(jobId), retryDelay);
-        } else {
-            showError(`檢查任務狀態失敗: ${error.message}`);
-            resetProcessButton();
-            clearTimeout(jobStatusTimer);
-            currentJobId = null;
-        }
+        handleJobError(jobId, error.message);
     }
+}
+
+// 處理任務更新
+function handleJobUpdate(jobId, jobData) {
+    const job = window.activeJobs.get(jobId);
+    if (!job) return;
+    
+    job.retryCount = 0;
+    job.lastError = null;
+    job.lastErrorTime = null;
+    job.lastStatus = jobData.status;
+    job.lastProgress = jobData.progress;
+    
+    updateProgressUI(jobData);
+    
+    if (jobData.status === 'completed') {
+        jobCompleted(jobData);
+        clearTimeout(jobStatusTimer);
+        currentJobId = null;
+        window.activeJobs.delete(jobId);
+    } else if (jobData.status === 'failed') {
+        jobFailed(jobData);
+        clearTimeout(jobStatusTimer);
+        currentJobId = null;
+        window.activeJobs.delete(jobId);
+    } else {
+        jobStatusTimer = setTimeout(() => checkJobStatus(jobId), POLLING_INTERVAL);
+    }
+}
+
+// 更新進度 UI
+function updateProgressUI(jobData) {
+    elements.processingBar.style.width = `${jobData.progress}%`;
+    elements.processingBar.setAttribute('aria-valuenow', jobData.progress);
+    elements.progressPercentage.textContent = `${jobData.progress}%`;
+    
+    if (jobData.message) {
+        elements.processingStatus.textContent = jobData.message;
+    }
+}
+
+// 處理任務錯誤
+function handleJobError(jobId, errorMessage) {
+    if (currentJobId === jobId) {
+        showError(`任務狀態檢查失敗，請重新提交處理請求`);
+        resetProcessButton();
+        clearTimeout(jobStatusTimer);
+        currentJobId = null;
+    }
+    window.activeJobs.delete(jobId);
 }
 
 // 任務完成處理
 function jobCompleted(job) {
-    // 啟用處理按鈕
     resetProcessButton();
-    
-    // 顯示結果區域
-    elements.progressContainer.classList.add('d-none');
-    elements.resultContainer.classList.remove('d-none');
+    if (elements.progressContainer) {
+        elements.progressContainer.classList.add('d-none');
+    }
+    if (elements.resultContainer) {
+        elements.resultContainer.classList.remove('d-none');
+    }
     
     const result = job.result;
     
-    // 填充結果資訊
     if (elements.resultTitle) {
         elements.resultTitle.innerHTML = `<i class="bi bi-file-text me-2"></i>${result.title || '未知標題'}`;
     }
@@ -815,7 +702,7 @@ function jobCompleted(job) {
     
     if (elements.resultTodos) {
         elements.resultTodos.innerHTML = '';
-        if (result.todos && result.todos.length > 0) {
+        if (result.todos?.length > 0) {
             result.todos.forEach(todo => {
                 const li = document.createElement('li');
                 li.innerHTML = `<i class="bi bi-check-square me-1"></i> ${todo}`;
@@ -852,35 +739,31 @@ function jobCompleted(job) {
         }
     }
     
-    // 顯示成功消息
     showSuccess('檔案處理完成！');
 }
 
 // 任務失敗處理
 function jobFailed(job) {
-    // 啟用處理按鈕
     resetProcessButton();
-    
-    // 顯示錯誤訊息
-    const errorMsg = job.error || '未知錯誤';
-    showError(`處理失敗: ${errorMsg}`);
-    
-    // 隱藏進度區域
-    elements.progressContainer.classList.add('d-none');
-    
-    // 在控制台輸出詳細錯誤信息以便調試
+    if (elements.progressContainer) {
+        elements.progressContainer.classList.add('d-none');
+    }
+    showError(`處理失敗: ${job.error || '未知錯誤'}`);
     console.error('任務處理失敗:', job);
 }
 
-// ===== 活躍任務管理 =====
-
 // 開始輪詢活躍任務
 function startActiveJobsPolling() {
-    // 先取得一次活躍任務
-    fetchActiveJobs();
+    if (activeJobsTimer) {
+        clearInterval(activeJobsTimer);
+    }
     
-    // 設定定時器，每 2 秒更新一次
-    activeJobsTimer = setInterval(fetchActiveJobs, 2000);
+    fetchActiveJobs();
+    activeJobsTimer = setInterval(() => {
+        fetchActiveJobs().catch(error => {
+            console.error('Error in active jobs polling:', error);
+        });
+    }, POLLING_INTERVAL);
 }
 
 // 停止輪詢活躍任務
@@ -896,146 +779,128 @@ async function fetchActiveJobs() {
     try {
         const response = await fetch(`${API_BASE_URL}/jobs?filter=active`);
         
-        if (!response.ok) {
-            // 如果是 404 或其他錯誤，不要立即更新 UI，而是保持當前狀態
-            console.warn(`獲取活躍任務失敗，狀態碼: ${response.status}，保持當前狀態`);
+        if (!response) {
+            console.warn('Empty response from server when fetching active jobs');
             return;
+        }
+        
+        if (!response.ok) {
+            if (response.status === 503) {
+                console.warn('Server is temporarily unavailable');
+                return;
+            }
+            throw new Error(`HTTP error! status: ${response.status}`);
         }
         
         const data = await response.json();
         
-        if (data.success) {
-            // 檢查數據是否真的發生變化
-            const currentJobsData = JSON.stringify(data.active_jobs || {});
-            if (currentJobsData === lastActiveJobsData) {
-                return; // 如果數據沒有變化，不更新 UI
-            }
-            lastActiveJobsData = currentJobsData;
-            
-            // 使用防抖動更新 UI
-            if (activeJobsUpdateTimeout) {
-                clearTimeout(activeJobsUpdateTimeout);
-            }
-            
-            activeJobsUpdateTimeout = setTimeout(() => {
-                // 更新活躍任務按鈕顯示
-                const activeJobsCount = Object.keys(data.active_jobs || {}).length;
-                
-                if (elements.showActiveJobsBtn) {
-                    // 只有在數量真正改變時才更新按鈕文字
-                    const currentText = elements.showActiveJobsBtn.textContent;
-                    const newText = activeJobsCount > 0 ? `活躍任務 (${activeJobsCount})` : '活躍任務';
-                    
-                    if (currentText !== newText) {
-                        elements.showActiveJobsBtn.textContent = newText;
-                        elements.showActiveJobsBtn.classList.toggle('btn-outline-primary', activeJobsCount > 0);
-                        elements.showActiveJobsBtn.classList.toggle('btn-outline-secondary', activeJobsCount === 0);
-                    }
-                }
-                
-                // 更新任務列表（如果已顯示）
-                if (!elements.jobsList.classList.contains('d-none')) {
-                    updateJobsList(data.active_jobs || {});
-                }
-            }, 300); // 300ms 的防抖動延遲
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to fetch active jobs');
         }
+        
+        updateActiveJobsList(data.jobs);
+        
     } catch (error) {
-        console.error('獲取活躍任務失敗:', error);
-        // 發生錯誤時不更新 UI，保持當前狀態
+        console.error('Error fetching active jobs:', error);
+        showLoadingState();
     }
 }
 
-// 更新任務列表
-function updateJobsList(jobs) {
+// 更新活躍任務列表
+function updateActiveJobsList(jobs) {
     if (!elements.jobsList) return;
     
-    const jobIds = Object.keys(jobs);
-    
-    // 如果沒有任務，且當前列表為空，則不進行任何更新
-    if (jobIds.length === 0 && elements.jobsList.querySelector('.alert-info')) {
-        return;
-    }
-    
-    // 如果沒有任務，顯示提示訊息
-    if (jobIds.length === 0) {
-        // 檢查是否已經顯示了相同的提示訊息
-        const existingAlert = elements.jobsList.querySelector('.alert-info');
-        if (existingAlert && existingAlert.textContent.includes('目前沒有活躍的任務')) {
-            return;
-        }
-        
+    if (!jobs || Object.keys(jobs).length === 0) {
         elements.jobsList.innerHTML = `
-            <div class="alert alert-info">
-                <i class="bi bi-info-circle-fill me-2"></i> 
-                目前沒有活躍的任務
+            <div class="empty-state">
+                <i class="bi bi-inbox"></i>
+                <p>目前沒有活躍的任務</p>
             </div>`;
         return;
     }
     
-    // 創建新的容器來存放更新後的內容
-    const newContent = document.createElement('div');
+    const tempContainer = document.createElement('div');
     
-    // 為每個任務創建卡片
-    jobIds.forEach(jobId => {
-        const job = jobs[jobId];
-        const card = document.createElement('div');
-        card.className = 'card mb-3';
-        card.id = `job-card-${jobId}`; // 添加唯一ID
-        
-        // 根據任務狀態設置卡片顏色
-        let statusBadge = '';
-        let statusIcon = '';
-        
-        if (job.status === 'pending') {
-            statusBadge = '<span class="badge bg-warning" style="font-size: 0.75rem;">等待中</span>';
-            statusIcon = '<i class="bi bi-hourglass me-1"></i>';
-        } else if (job.status === 'processing') {
-            statusBadge = '<span class="badge bg-info">處理中</span>';
-            statusIcon = '<i class="bi bi-gear-fill me-1 spinning"></i>';
-        }
-        
-        // 格式化時間
-        const createdTime = new Date(job.created_at).toLocaleString();
-        const updatedTime = new Date(job.updated_at).toLocaleString();
-        
-        const cardContent = `
-            <div class="card-body">
-                <h5 class="card-title">${statusIcon} 任務 ${statusBadge}</h5>
-                <div class="progress mb-3">
-                    <div class="progress-bar" role="progressbar" style="width: ${job.progress}%;" 
-                         aria-valuenow="${job.progress}" aria-valuemin="0" aria-valuemax="100">
-                        ${job.progress}%
-                    </div>
-                </div>
-                <p class="card-text">${job.message || '處理中...'}</p>
-                <p class="card-text">
-                    <small class="text-muted">
-                        <i class="bi bi-calendar-event me-1"></i> 創建於: ${createdTime}<br>
-                        <i class="bi bi-clock me-1"></i> 更新於: ${updatedTime}
-                    </small>
-                </p>
-            </div>
-        `;
-        
-        // 檢查是否存在相同的卡片
-        const existingCard = document.getElementById(`job-card-${jobId}`);
-        if (existingCard) {
-            // 如果卡片存在，只更新內容
-            existingCard.innerHTML = cardContent;
-        } else {
-            // 如果卡片不存在，創建新的卡片
-            card.innerHTML = cardContent;
-            newContent.appendChild(card);
-        }
+    Object.entries(jobs).forEach(([jobId, job]) => {
+        const jobElement = createJobElement(jobId, job);
+        tempContainer.appendChild(jobElement);
     });
     
-    // 如果沒有新的卡片需要添加，直接返回
-    if (newContent.children.length === 0) {
-        return;
-    }
+    elements.jobsList.innerHTML = '';
+    elements.jobsList.appendChild(tempContainer);
+}
+
+// 創建任務元素
+function createJobElement(jobId, job) {
+    const jobElement = document.createElement('div');
+    jobElement.className = 'job-item';
+    jobElement.id = `job-${jobId}`;
     
-    // 一次性更新 DOM，減少閃爍
-    elements.jobsList.appendChild(newContent);
+    const statusClass = getStatusBadgeClass(job.status);
+    const statusText = getStatusText(job.status);
+    const statusIcon = getStatusIcon(job.status);
+    
+    const stopButton = job.status === 'processing' ? `
+        <button class="btn btn-danger btn-sm ms-2" onclick="stopJob('${jobId}')">
+            <i class="bi bi-stop-circle"></i> 停止
+        </button>
+    ` : '';
+    
+    jobElement.innerHTML = `
+        <div class="d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center">
+                <span class="badge ${statusClass} me-2">
+                    <i class="bi ${statusIcon} me-1"></i>${statusText}
+                </span>
+                <span class="text-truncate" style="max-width: 200px;">${job.message || '處理中...'}</span>
+            </div>
+            <div class="d-flex align-items-center">
+                <small class="text-muted me-2">${formatTimestamp(job.updated_at)}</small>
+                ${stopButton}
+            </div>
+        </div>
+    `;
+    
+    return jobElement;
+}
+
+// 獲取狀態徽章類別
+function getStatusBadgeClass(status) {
+    const statusClasses = {
+        pending: 'bg-secondary',
+        processing: 'bg-primary',
+        completed: 'bg-success',
+        failed: 'bg-danger'
+    };
+    return statusClasses[status] || 'bg-secondary';
+}
+
+// 獲取狀態文字
+function getStatusText(status) {
+    const statusTexts = {
+        pending: '等待中',
+        processing: '處理中',
+        completed: '已完成',
+        failed: '失敗'
+    };
+    return statusTexts[status] || status;
+}
+
+// 獲取狀態圖標
+function getStatusIcon(status) {
+    const statusIcons = {
+        pending: 'bi-hourglass-split',
+        processing: 'bi-arrow-repeat',
+        completed: 'bi-check-circle',
+        failed: 'bi-x-circle'
+    };
+    return statusIcons[status] || 'bi-question-circle';
+}
+
+// 格式化時間戳
+function formatTimestamp(timestamp) {
+    if (!timestamp) return '';
+    return new Date(timestamp).toLocaleTimeString();
 }
 
 // 切換顯示/隱藏活躍任務列表
@@ -1043,24 +908,18 @@ function toggleActiveJobs() {
     const isVisible = !elements.jobsList.classList.contains('d-none');
     
     if (isVisible) {
-        // 隱藏任務列表
         elements.jobsList.classList.add('d-none');
     } else {
-        // 顯示任務列表並更新內容
         elements.jobsList.classList.remove('d-none');
         elements.jobsList.innerHTML = `
-            <div class="loading-container">
-                <div class="spinner-border" role="status">
-                    <span class="visually-hidden">載入中...</span>
-                </div>
-                <p>正在載入活躍任務...</p>
+            <div class="loading-state">
+                <div class="spinner-border text-primary" role="status"></div>
+                <p class="mt-2 mb-0 text-muted">正在載入活躍任務...</p>
             </div>
         `;
         fetchActiveJobs();
     }
 }
-
-// ===== 輔助函數 =====
 
 // 檢查是否為音訊檔案
 function isAudioFile(mimeType) {
@@ -1080,3 +939,216 @@ function formatFileSize(bytes) {
     
     return (bytes / Math.pow(1024, i)).toFixed(2) + ' ' + sizes[i];
 }
+
+// 停止任務
+async function stopJob(jobId) {
+    const result = await Swal.fire({
+        title: '確定要停止這個任務嗎？',
+        text: '停止後將無法恢復，需要重新處理檔案。',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#dc3545',
+        cancelButtonColor: '#6c757d',
+        confirmButtonText: '確定停止',
+        cancelButtonText: '取消',
+        reverseButtons: true,
+        customClass: {
+            confirmButton: 'btn btn-danger',
+            cancelButton: 'btn btn-secondary'
+        }
+    });
+
+    if (!result.isConfirmed) {
+        return;
+    }
+
+    const jobElement = document.getElementById(`job-${jobId}`);
+    if (jobElement) {
+        jobElement.classList.add('removing');
+    }
+
+    try {
+        // 先發送停止請求
+        const stopResponse = await fetch(`${API_BASE_URL}/job/${jobId}/stop`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (!stopResponse.ok) {
+            const errorData = await stopResponse.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP error! status: ${stopResponse.status}`);
+        }
+
+        const stopData = await stopResponse.json();
+
+        if (stopData.success) {
+            // 等待一小段時間確保任務已停止
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            // 再次檢查任務狀態以確認已停止
+            const statusResponse = await fetch(`${API_BASE_URL}/job/${jobId}`);
+            const statusData = await statusResponse.json();
+
+            if (statusData.success && statusData.job.status === 'failed') {
+                Swal.fire({
+                    title: '任務已停止',
+                    text: '任務已成功停止。',
+                    icon: 'success',
+                    timer: 2000,
+                    showConfirmButton: false
+                });
+
+                // 等待動畫完成後再更新列表
+                setTimeout(() => {
+                    fetchActiveJobs();
+                }, 300);
+            } else {
+                throw new Error('任務未能成功停止');
+            }
+        } else {
+            throw new Error(stopData.error || '停止任務失敗');
+        }
+    } catch (error) {
+        console.error('停止任務失敗:', error);
+        Swal.fire({
+            title: '停止任務失敗',
+            text: error.message || '請稍後再試。',
+            icon: 'error',
+            confirmButtonColor: '#dc3545'
+        });
+        
+        if (jobElement) {
+            jobElement.classList.remove('removing');
+        }
+    }
+}
+
+function startJobUpdates() {
+    if (jobUpdateInterval) {
+        clearInterval(jobUpdateInterval);
+    }
+    
+    // 立即執行一次更新
+    updateActiveJobsList();
+    
+    // 設置定時更新
+    jobUpdateInterval = setInterval(updateActiveJobsList, UPDATE_INTERVAL);
+}
+
+function stopJobUpdates() {
+    if (jobUpdateInterval) {
+        clearInterval(jobUpdateInterval);
+        jobUpdateInterval = null;
+    }
+}
+
+async function updateActiveJobsList() {
+    try {
+        const response = await fetch('/api/jobs/active');
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        if (data.status !== 'success') {
+            throw new Error(data.message || '獲取任務列表失敗');
+        }
+        
+        const jobs = data.data.jobs;
+        const jobsList = document.getElementById('jobs-list');
+        
+        if (!jobsList) {
+            console.warn('找不到任務列表元素');
+            return;
+        }
+        
+        // 檢查是否需要更新
+        const currentTime = new Date().getTime();
+        if (lastUpdateTime && currentTime - lastUpdateTime < UPDATE_INTERVAL) {
+            return; // 避免過於頻繁的更新
+        }
+        lastUpdateTime = currentTime;
+        
+        // 更新任務列表
+        if (Object.keys(jobs).length === 0) {
+            jobsList.innerHTML = `
+                <div class="empty-state">
+                    <i class="bi bi-inbox"></i>
+                    <p>目前沒有活躍的任務</p>
+                </div>
+            `;
+        } else {
+            jobsList.innerHTML = Object.values(jobs).map(job => `
+                <div class="job-item" data-job-id="${job.id}">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div>
+                            <span class="badge ${getStatusBadgeClass(job.status)}">${getStatusText(job.status)}</span>
+                            <small class="text-muted ms-2">${formatDate(job.created_at)}</small>
+                        </div>
+                        ${job.status === 'processing' || job.status === 'pending' ? `
+                            <button class="btn btn-danger btn-sm" onclick="stopJob('${job.id}')">
+                                <i class="bi bi-stop-circle"></i> 停止
+                            </button>
+                        ` : ''}
+                    </div>
+                    ${job.status === 'processing' ? `
+                        <div class="progress mb-2">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                 role="progressbar" 
+                                 style="width: ${job.progress}%" 
+                                 aria-valuenow="${job.progress}" 
+                                 aria-valuemin="0" 
+                                 aria-valuemax="100">
+                                ${job.progress}%
+                            </div>
+                        </div>
+                    ` : ''}
+                    ${job.error ? `
+                        <div class="alert alert-danger py-2 mb-0">
+                            <i class="bi bi-exclamation-circle"></i> ${job.error}
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+        }
+    } catch (error) {
+        console.error('更新任務列表失敗:', error);
+        // 不要在這裡顯示錯誤提示，避免頻繁彈出
+    }
+}
+
+function getStatusBadgeClass(status) {
+    switch (status) {
+        case 'pending': return 'bg-warning';
+        case 'processing': return 'bg-primary';
+        case 'completed': return 'bg-success';
+        case 'failed': return 'bg-danger';
+        default: return 'bg-secondary';
+    }
+}
+
+function getStatusText(status) {
+    switch (status) {
+        case 'pending': return '等待中';
+        case 'processing': return '處理中';
+        case 'completed': return '已完成';
+        case 'failed': return '失敗';
+        default: return '未知';
+    }
+}
+
+function formatDate(dateString) {
+    const date = new Date(dateString);
+    return date.toLocaleString('zh-TW', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+// 在頁面卸載時停止任務更新
+window.addEventListener('beforeunload', () => {
+    stopJobUpdates();
+});
