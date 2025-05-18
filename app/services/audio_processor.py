@@ -57,14 +57,65 @@ class AudioProcessor:
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         # 註冊 executor 關閉函數
         atexit.register(self.shutdown_executor)
+        
         # 工作狀態追蹤
         self.jobs = {}
-        # 確保線程安全的鎖
+        self.jobs_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'jobs.json')
         self.jobs_lock = threading.Lock()
+        self.active_threads = {}
+        
+        # 確保jobs目錄存在
+        os.makedirs(os.path.dirname(self.jobs_file), exist_ok=True)
+        
+        # 載入已存在的工作
+        self._load_jobs()
+        
         # 初始化 Notion 格式化工具
         self.notion_formatter = NotionFormatter()
         # 初始化服務
         self.init_services()
+
+    def _load_jobs(self):
+        """從文件載入工作狀態，並清理非活動的工作"""
+        try:
+            if os.path.exists(self.jobs_file):
+                with open(self.jobs_file, 'r') as f:
+                    loaded_jobs = json.load(f)
+                
+                # 只保留正在執行中的工作
+                self.jobs = {
+                    job_id: job for job_id, job in loaded_jobs.items()
+                    if job['status'] in [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']]
+                }
+                
+                # 如果有被清理的工作，更新文件
+                if len(self.jobs) != len(loaded_jobs):
+                    self._save_jobs()
+                    logging.info(f"🧹 已清理 {len(loaded_jobs) - len(self.jobs)} 個非活動工作")
+                
+                logging.info(f"✅ 已從 {self.jobs_file} 載入 {len(self.jobs)} 個活動工作")
+            else:
+                self.jobs = {}
+                logging.info("📝 未找到現有的工作文件，將創建新的工作記錄")
+        except Exception as e:
+            logging.error(f"❌ 載入工作狀態失敗: {e}")
+            self.jobs = {}
+            # 如果文件損壞，刪除它
+            if os.path.exists(self.jobs_file):
+                try:
+                    os.remove(self.jobs_file)
+                    logging.info("🗑️ 已刪除損壞的工作文件")
+                except Exception as del_e:
+                    logging.error(f"❌ 刪除損壞的工作文件失敗: {del_e}")
+
+    def _save_jobs(self):
+        """保存工作狀態到文件"""
+        try:
+            with open(self.jobs_file, 'w') as f:
+                json.dump(self.jobs, f)
+            logging.debug(f"✅ 已保存 {len(self.jobs)} 個工作到 {self.jobs_file}")
+        except Exception as e:
+            logging.error(f"❌ 保存工作狀態失敗: {e}")
 
     def init_services(self):
         """初始化所有需要的服務"""
@@ -481,8 +532,8 @@ class AudioProcessor:
             # 使用更詳細的Markdown格式指示
             system_prompt = """
             你具備電子工程通訊相關背景，能夠理解技術性內容(包括一些常聽到的socket, RIC, gNB, nFAPI, OAI等術語)。
-            將錄音逐字稿整理成筆記內容，請使用Markdown格式直接輸出筆記內容:
-            避免使用```markdown```，直接輸出Markdown格式的筆記內容。
+            將錄音逐字稿整理成筆記，使用Markdown格式直接輸出筆記內容，
+            請勿使用```markdown```，直接輸出Markdown格式的詳細筆記內容。
             """
 
             # Use the function in generate_comprehensive_notes
@@ -1156,6 +1207,20 @@ class AudioProcessor:
         try:
             logging.info(f"[Job {job_id}] 開始處理 file_id: {file_id}")
             
+            # 初始化停止標誌
+            self.active_threads[job_id] = {'stop_flag': False}
+            
+            # 立即更新狀態為處理中
+            with self.jobs_lock:
+                self.jobs[job_id]['status'] = JOB_STATUS['PROCESSING']
+                self.jobs[job_id]['progress'] = 5
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
+            
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
+            
             # 獲取原始檔案名稱
             try:
                 file_meta = self.drive_service.files().get(
@@ -1167,48 +1232,77 @@ class AudioProcessor:
                 logging.error(f"[Job {job_id}] ❌ 獲取原始檔案名稱失敗: {e}")
                 original_filename = ""
             
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
+            
             # 更新進度: 10%
             with self.jobs_lock:
                 self.jobs[job_id]['progress'] = 10
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
             
             # 處理附件 (如果有)
             if attachment_file_ids:
                 attachment_texts = []
                 for attachment_file_id in attachment_file_ids:
+                    # 檢查是否應該停止
+                    if self.active_threads[job_id]['stop_flag']:
+                        raise Exception("Task stopped by user")
+                        
                     attachment_text, attachment_temp_dir = self.download_and_extract_text(attachment_file_id)
                     attachment_texts.append(attachment_text)
                     if attachment_temp_dir:
                         attachments_temp_dir = attachment_temp_dir
             
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
+            
             # 更新進度: 20%
             with self.jobs_lock:
                 self.jobs[job_id]['progress'] = 20
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
             
             # 下載音頻檔案
             audio_path, audio_temp_dir = self.download_from_drive(file_id)
+            
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
             
             # 更新進度: 30%
             with self.jobs_lock:
                 self.jobs[job_id]['progress'] = 30
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
             
             # 處理音頻: 轉錄和說話人分離
             _, segments, original_speakers = self.process_audio(audio_path)
+            
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
             
             # 更新進度: 60%
             with self.jobs_lock:
                 self.jobs[job_id]['progress'] = 60
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
                 
             # 識別說話人
             speaker_map = self.identify_speakers(segments, original_speakers)
+            
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
             
             # 更新進度: 70%
             with self.jobs_lock:
                 self.jobs[job_id]['progress'] = 70
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
             
             # 準備輸出
             updated_segments = []
@@ -1216,14 +1310,23 @@ class AudioProcessor:
             if not segments:
                 logging.warning(f"[Job {job_id}] ⚠️ No segments found after audio processing. Transcript will be empty.")
             for seg in segments:
+                # 檢查是否應該停止
+                if self.active_threads[job_id]['stop_flag']:
+                    raise Exception("Task stopped by user")
+                    
                 identified_speaker = speaker_map.get(seg['speaker'], seg['speaker'])
                 updated_segments.append({**seg, "speaker": identified_speaker})
                 transcript_for_summary += f"[{identified_speaker}]: {seg['text']}\n"
+            
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
             
             # 更新進度: 75%
             with self.jobs_lock:
                 self.jobs[job_id]['progress'] = 75
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
             
             # 生成摘要
             summary_data = self.generate_summary(transcript_for_summary, attachment_texts[0] if attachment_texts else None)
@@ -1231,20 +1334,30 @@ class AudioProcessor:
             summary = summary_data["summary"]
             todos = summary_data["todos"]
             
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
+            
             # 更新進度: 85%
             with self.jobs_lock:
                 self.jobs[job_id]['progress'] = 85
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
             
             # 建立 Notion 頁面
             page_id, page_url = self.create_notion_page(
                 title, summary, todos, updated_segments, speaker_map, file_id
             )
             
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
+            
             # 更新進度: 95%
             with self.jobs_lock:
                 self.jobs[job_id]['progress'] = 95
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
             
             # 重命名 Google Drive 檔案 (可選)
             # 從原始檔名提取日期，如果無法提取則使用當前日期
@@ -1273,6 +1386,8 @@ class AudioProcessor:
                 self.jobs[job_id]['progress'] = 100
                 self.jobs[job_id]['result'] = result
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self.jobs[job_id]['completed_at'] = datetime.now().isoformat()
+                self._save_jobs()
             
             logging.info(f"[Job {job_id}] ✅ 處理完成")
             return result
@@ -1304,6 +1419,8 @@ class AudioProcessor:
                 self.jobs[job_id]['result'] = error_result
                 self.jobs[job_id]['error'] = str(e)
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self.jobs[job_id]['completed_at'] = datetime.now().isoformat()
+                self._save_jobs()
             
             return error_result
 
@@ -1315,6 +1432,11 @@ class AudioProcessor:
             if attachments_temp_dir and os.path.exists(attachments_temp_dir):
                 logging.info(f"[Job {job_id}] 🧹 清理附件臨時目錄")
                 shutil.rmtree(attachments_temp_dir)
+            
+            # 清理線程記錄
+            if job_id in self.active_threads:
+                del self.active_threads[job_id]
+                logging.info(f"[Job {job_id}] 🧹 已清理線程記錄")
 
     def process_file_async(self, file_id: str, attachment_file_ids: Optional[List[str]] = None) -> str:
         """非同步處理檔案，返回工作 ID"""
@@ -1334,6 +1456,7 @@ class AudioProcessor:
                 'result': None,
                 'error': None
             }
+            self._save_jobs()  # 保存工作狀態
         
         # 提交工作到線程池
         self.executor.submit(
@@ -1398,7 +1521,8 @@ class AudioProcessor:
                 # 如果狀態是完成或失敗，記錄完成時間
                 if status in [JOB_STATUS['COMPLETED'], JOB_STATUS['FAILED']]:
                     self.jobs[job_id]['completed_at'] = datetime.utcnow().isoformat() + 'Z'
-                    
+                
+                self._save_jobs()  # 保存工作狀態
                 logging.info(f"📊 工作進度更新 - ID: {job_id}, 狀態: {self.jobs[job_id]['status']}, 進度: {progress}%, 訊息: {message}")
             else:
                 logging.warning(f"⚠️ 嘗試更新不存在的工作 ID: {job_id}")
@@ -1413,3 +1537,206 @@ class AudioProcessor:
                 logging.info("✅ AudioProcessor 的 ThreadPoolExecutor 已成功關閉。")
             except Exception as e:
                 logging.error(f"❌ 關閉 AudioProcessor 的 ThreadPoolExecutor 時發生錯誤: {e}", exc_info=True)
+
+    def initialize_oauth_service(self, credentials):
+        """
+        用於 OAuth 回調後初始化 Google Drive 服務。
+        """
+        self.oauth_credentials = credentials
+        self.oauth_drive_service = build('drive', 'v3', credentials=credentials)
+
+    def process_audio_file(self, job_id, file_id, attachment_file_ids=None):
+        """處理音頻文件的主函數"""
+        try:
+            # 初始化停止標誌
+            self.active_threads[job_id] = {'stop_flag': False}
+            
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
+            
+            # 更新工作狀態為處理中
+            with self.jobs_lock:
+                self.jobs[job_id]['status'] = JOB_STATUS['PROCESSING']
+                self.jobs[job_id]['progress'] = 10
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
+            
+            # 下載音頻文件
+            audio_path, temp_dir = self.download_from_drive(file_id)
+            
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
+            
+            # 更新進度
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 30
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
+            
+            # 處理音頻：轉錄和說話人分離
+            transcript, segments, original_speakers = self.process_audio(audio_path)
+            
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
+            
+            # 更新進度
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 60
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
+            
+            # 識別說話人
+            speaker_map = self.identify_speakers(segments, original_speakers)
+            
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
+            
+            # 更新進度
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 70
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
+            
+            # 生成摘要
+            summary_data = self.generate_summary(transcript)
+            
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
+            
+            # 更新進度
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 85
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
+            
+            # 創建 Notion 頁面
+            page_id, page_url = self.create_notion_page(
+                summary_data['title'],
+                summary_data['summary'],
+                summary_data['todos'],
+                segments,
+                speaker_map,
+                file_id
+            )
+            
+            # 檢查是否應該停止
+            if self.active_threads[job_id]['stop_flag']:
+                raise Exception("Task stopped by user")
+            
+            # 更新進度
+            with self.jobs_lock:
+                self.jobs[job_id]['progress'] = 95
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self._save_jobs()
+            
+            # 重命名 Google Drive 文件
+            file_date = self.extract_date_from_filename(file_id)
+            date_str = file_date if file_date else datetime.now().strftime('%Y-%m-%d')
+            new_filename = f"[{date_str}] {summary_data['title']}.m4a"
+            self.rename_drive_file(file_id, new_filename)
+            
+            # 更新工作狀態為完成
+            result = {
+                "success": True,
+                "notion_page_id": page_id,
+                "notion_page_url": page_url,
+                "title": summary_data['title'],
+                "summary": summary_data['summary'],
+                "todos": summary_data['todos'],
+                "identified_speakers": speaker_map,
+                "drive_filename": new_filename
+            }
+            
+            with self.jobs_lock:
+                self.jobs[job_id]['status'] = JOB_STATUS['COMPLETED']
+                self.jobs[job_id]['progress'] = 100
+                self.jobs[job_id]['result'] = result
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                self.jobs[job_id]['completed_at'] = datetime.now().isoformat()
+                self._save_jobs()
+            
+            return result
+            
+        except Exception as e:
+            logging.error(f"Error processing audio file: {e}")
+            with self.jobs_lock:
+                if job_id in self.jobs:
+                    self.jobs[job_id]['status'] = JOB_STATUS['FAILED']
+                    self.jobs[job_id]['error'] = str(e)
+                    self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                    self.jobs[job_id]['completed_at'] = datetime.now().isoformat()
+                    self._save_jobs()
+        finally:
+            # 清理線程記錄
+            if job_id in self.active_threads:
+                del self.active_threads[job_id]
+
+    def stop_job(self, job_id: str) -> bool:
+        """停止指定的任務"""
+        with self.jobs_lock:
+            if job_id not in self.jobs:
+                logging.warning(f"⚠️ 嘗試停止不存在的工作: {job_id}")
+                return False
+            
+            job = self.jobs[job_id]
+            if job['status'] not in [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']]:
+                logging.warning(f"⚠️ 嘗試停止已完成或失敗的工作: {job_id} (狀態: {job['status']})")
+                return False
+            
+            # 設置停止標誌
+            if job_id in self.active_threads:
+                self.active_threads[job_id]['stop_flag'] = True
+                logging.info(f"✅ 已設置工作 {job_id} 的停止標誌")
+            else:
+                logging.warning(f"⚠️ 工作 {job_id} 沒有對應的活動線程")
+            
+            # 更新任務狀態
+            job['status'] = JOB_STATUS['FAILED']
+            job['error'] = "Task stopped by user"
+            job['updated_at'] = datetime.now().isoformat()
+            job['completed_at'] = datetime.now().isoformat()
+            
+            # 保存更新
+            self._save_jobs()
+            logging.info(f"✅ 工作 {job_id} 已標記為停止")
+            return True
+
+    def get_all_jobs(self) -> Dict[str, Any]:
+        """獲取所有工作狀態"""
+        with self.jobs_lock:
+            return {
+                job_id: {
+                    'id': job['id'],
+                    'file_id': job['file_id'],
+                    'status': job['status'],
+                    'progress': job['progress'],
+                    'created_at': job['created_at'],
+                    'updated_at': job['updated_at'],
+                    'error': job.get('error'),
+                    'result': job.get('result')
+                }
+                for job_id, job in self.jobs.items()
+            }
+
+    def get_active_jobs(self) -> Dict[str, Any]:
+        """獲取所有活動中的工作狀態"""
+        with self.jobs_lock:
+            return {
+                job_id: {
+                    'id': job['id'],
+                    'file_id': job['file_id'],
+                    'status': job['status'],
+                    'progress': job['progress'],
+                    'created_at': job['created_at'],
+                    'updated_at': job['updated_at'],
+                    'error': job.get('error'),
+                    'result': job.get('result')
+                }
+                for job_id, job in self.jobs.items()
+                if job['status'] in [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']]
+            }
