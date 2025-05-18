@@ -1,7 +1,7 @@
 import os
 import logging
 import json
-from flask import Blueprint, request, jsonify, redirect, session, url_for
+from flask import Blueprint, request, jsonify, redirect, session, url_for, current_app
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 import google.auth.transport.requests
@@ -89,7 +89,11 @@ def auth_google():
         try:
             flow = Flow.from_client_secrets_file(
                 client_secrets_file,
-                scopes=['https://www.googleapis.com/auth/drive.readonly'],
+                scopes=[
+                    'https://www.googleapis.com/auth/drive.readonly',
+                    'https://www.googleapis.com/auth/userinfo.profile',
+                    'https://www.googleapis.com/auth/userinfo.email'
+                ],
                 redirect_uri=redirect_uri
             )
             
@@ -130,9 +134,6 @@ def auth_google_login():
 
 @auth_bp.route('/api/auth/callback')
 def auth_callback():
-    from app.services.audio_processor import AudioProcessor
-    from main import processor
-    
     code = request.args.get('code')
     state = request.args.get('state')
     error = request.args.get('error')
@@ -195,404 +196,184 @@ def auth_callback():
         
         flow = Flow.from_client_secrets_file(
             client_secrets_file,
-            scopes=['https://www.googleapis.com/auth/drive.readonly'], # Ensure scopes match original request
+            scopes=[
+                'https://www.googleapis.com/auth/drive.readonly',
+                'https://www.googleapis.com/auth/userinfo.profile',
+                'https://www.googleapis.com/auth/userinfo.email'
+            ],
             state=state,
             redirect_uri=redirect_uri
         )
         
-        try:
-            logging.info("🔄 使用授權碼換取令牌...")
-            flow.fetch_token(code=code)
-            credentials = flow.credentials
-            
-            session['authenticated'] = True
-            logging.info("✅ OAuth 認證狀態已設置為 True")
-
-            # 保存用戶信息到session
-            try:
-                # Use credentials.client_id which should be populated by the flow
-                google_client_id = credentials.client_id
-                
-                request_session_for_user_info = google.auth.transport.requests.Request()
-                id_info = id_token.verify_oauth2_token(
-                    credentials.id_token,
-                    request_session_for_user_info,
-                    google_client_id
-                )
-                user_info = {
-                    'id': id_info.get('sub'),
-                    'name': id_info.get('name', '未知用戶'),
-                    'email': id_info.get('email', ''),
-                    'picture': id_info.get('picture')
-                }
-                session['user_info'] = user_info
-                logging.info(f"✅ 用戶資訊已獲取並存儲到 session: {user_info.get('name')}")
-            except Exception as e:
-                logging.warning(f"⚠️ 在 auth_callback 中獲取用戶資訊失敗: {str(e)}. Session user_info 可能不完整。")
-                session['user_info'] = { 
-                    'id': 'unknown', 
-                    'name': '資訊獲取失敗', 
-                    'email': '', 
-                    'picture': None
-                }
-            
-            # 保存憑證到 session
-            session['credentials'] = {
-                'token': credentials.token,
-                'refresh_token': credentials.refresh_token,
-                'token_uri': credentials.token_uri,
-                'client_id': credentials.client_id,
-                'client_secret': credentials.client_secret,
-                'scopes': credentials.scopes,
-                'id_token': credentials.id_token if hasattr(credentials, 'id_token') else None 
-            }
-            logging.info("✅ OAuth 憑證已轉換並存儲到 session")
-            
-            # 使用OAuth憑證初始化Drive服務
-            try:
-                if processor is not None:
-                    if processor.set_oauth_credentials(credentials):
-                        logging.info("✅ 已成功將OAuth憑證設置到AudioProcessor")
-                    else:
-                        logging.error("❌ 設置OAuth憑證到AudioProcessor失敗")
-            except Exception as e:
-                logging.error(f"⚠️ 設置OAuth憑證到AudioProcessor時發生錯誤: {str(e)}")
-            
-            logging.info("✅ OAuth 認證成功，重定向到應用主頁")
-            return redirect('/') # Redirect to the main application page
-
-        except google.auth.exceptions.RefreshError as re:
-            error_msg = f"OAuth 憑證刷新失敗: {str(re)}"
-            logging.error(f"❌ OAuth 回調處理錯誤 (憑證刷新): {error_msg}", exc_info=True)
-            return redirect(f'/login?error={error_msg}')
-        except google.auth.exceptions.OAuthError as oe:
-            error_msg = f"OAuth 令牌交換或驗證失敗: {str(oe)}"
-            logging.error(f"❌ OAuth 回調處理錯誤 (OAuthError): {error_msg}", exc_info=True)
-            return redirect(f'/login?error={error_msg}')
-        except Exception as e:
-            error_msg = f"處理 OAuth 回調時發生內部錯誤: {str(e)}" # Changed from "建立 OAuth 流程失敗"
-            logging.error(f"❌ OAuth 回調處理錯誤 (內部): {error_msg}", exc_info=True)
-            return redirect(f'/login?error={error_msg}')    
-            
-    except Exception as e: # Outer try-except for pre-token-exchange issues
-        error_msg = f"OAuth 回調前置檢查失敗: {str(e)}"
-        logging.error(f"❌ OAuth 回調處理錯誤 (前置檢查): {error_msg}", exc_info=True)
+        # 使用授權碼獲取憑證
+        flow.fetch_token(code=code)
+        credentials = flow.credentials
+        
+        # 儲存憑證到 session
+        session['credentials'] = {
+            'token': credentials.token,
+            'refresh_token': credentials.refresh_token,
+            'token_uri': credentials.token_uri,
+            'client_id': credentials.client_id,
+            'client_secret': credentials.client_secret,
+            'scopes': credentials.scopes
+        }
+        
+        # 設置認證狀態
+        session['authenticated'] = True
+        
+        # 初始化 AudioProcessor 的 OAuth 服務
+        processor = current_app.audio_processor
+        processor.initialize_oauth_service(credentials)
+        
+        logging.info("✅ OAuth 回調處理成功")
+        return redirect('/')
+        
+    except Exception as e:
+        error_msg = f'OAuth 回調處理失敗: {str(e)}'
+        logging.error(f"❌ {error_msg}")
         return redirect(f'/login?error={error_msg}')
 
 @auth_bp.route('/api/auth/token', methods=['POST'])
 def auth_token():
-    """將授權碼轉換為令牌"""
+    """獲取新的訪問令牌"""
     try:
-        data = request.json
-        code = data.get('code')
-        
-        if not code:
-            return jsonify({'success': False, 'error': 'No authorization code provided'})
+        credentials_dict = session.get('credentials')
+        if not credentials_dict:
+            return jsonify({
+                'success': False,
+                'error': '未找到憑證信息'
+            }), 401
             
-        # 設定 OAuth 流程
-        client_secrets_file = os.getenv("GOOGLE_CLIENT_SECRET_PATH", 
-                            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 
-                            "credentials/client_secret.json"))
+        credentials = Credentials(
+            token=credentials_dict['token'],
+            refresh_token=credentials_dict['refresh_token'],
+            token_uri=credentials_dict['token_uri'],
+            client_id=credentials_dict['client_id'],
+            client_secret=credentials_dict['client_secret'],
+            scopes=credentials_dict['scopes']
+        )
         
-        # 確認 client_secret.json 文件存在
-        if not os.path.exists(client_secrets_file):
-            alt_path = "/app/credentials/client_secret.json"
-            if os.path.exists(alt_path):
-                client_secrets_file = alt_path
-                logging.info(f"✅ 找到替代 OAuth 配置路徑: {alt_path}")
-            else:
-                return jsonify({'success': False, 'error': '找不到 OAuth 配置文件'})
+        # 如果令牌已過期，則刷新
+        if credentials.expired:
+            credentials.refresh(google.auth.transport.requests.Request())
+            # 更新 session 中的令牌
+            session['credentials']['token'] = credentials.token
+            
+        return jsonify({
+            'success': True,
+            'token': credentials.token
+        })
         
-        # 構建重定向URI
-        redirect_uri = session.get('redirect_uri')
-        if not redirect_uri:
-            # 使用默認值
-            redirect_uri = request.url_root.rstrip('/') + '/api/auth/callback'
-            # 檢查是否需要替換內部地址
-            if 'localhost' in redirect_uri or '0.0.0.0' in redirect_uri or '127.0.0.1' in redirect_uri:
-                external_url = os.getenv("EXTERNAL_URL")
-                if external_url:
-                    redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
-                else:
-                    redirect_uri = "http://localhost:5000/api/auth/callback"
-        
-        # 從session獲取狀態
-        state = session.get('flow_state')
-        if not state:
-            return jsonify({'success': False, 'error': '找不到OAuth流程狀態'})
-        
-        # 建立流程並交換令牌
-        try:
-            flow = Flow.from_client_secrets_file(
-                client_secrets_file,
-                scopes=['https://www.googleapis.com/auth/drive.readonly'],
-                state=state,
-                redirect_uri=redirect_uri
-            )
-            
-            # 使用授權碼換取令牌
-            flow.fetch_token(code=code)
-            credentials = flow.credentials
-            
-            # 設定會話認證狀態
-            session['authenticated'] = True
-            
-            # 保存用戶信息到session
-            try:
-                # 獲取用戶資訊
-                request_session = google.auth.transport.requests.Request()
-                id_info = id_token.verify_oauth2_token(
-                    credentials.id_token,
-                    request_session,
-                    credentials.client_id
-                )
-                
-                user_info = {
-                    'id': id_info.get('sub'),
-                    'name': id_info.get('name', '未知用戶'),
-                    'email': id_info.get('email', ''),
-                    'picture': id_info.get('picture')
-                }
-                
-                session['user_info'] = user_info
-                
-                # 初始化Drive服務
-                from main import processor
-                if processor is not None:
-                    if processor.set_oauth_credentials(credentials):
-                        logging.info("✅ 已成功將OAuth憑證設置到AudioProcessor")
-                    else:
-                        logging.error("❌ 設置OAuth憑證到AudioProcessor失敗")
-                
-                return jsonify({'success': True, 'user': user_info})
-                
-            except Exception as e:
-                logging.error(f"獲取用戶資訊失敗: {str(e)}")
-                session['authenticated'] = True  # 仍然設定為已認證
-                return jsonify({'success': True, 'message': '認證成功，但獲取用戶資訊失敗'})
-                
-        except Exception as e:
-            logging.error(f"交換令牌失敗: {str(e)}")
-            return jsonify({'success': False, 'error': f"交換令牌失敗: {str(e)}"})
-            
     except Exception as e:
-        logging.error(f"處理令牌交換時發生錯誤: {str(e)}")
-        return jsonify({'success': False, 'error': f"處理令牌交換時發生錯誤: {str(e)}"})
+        logging.error(f"❌ 刷新令牌失敗: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'刷新令牌失敗: {str(e)}'
+        }), 500
 
 @auth_bp.route('/api/auth/status')
 def auth_status():
-    """檢查用戶認證狀態並返回實際用戶資訊，增強錯誤處理"""
+    """檢查認證狀態"""
     try:
-        authenticated = session.get('authenticated', False)
+        is_authenticated = session.get('authenticated', False)
+        credentials = session.get('credentials')
         
-        if authenticated:
-            try:
-                # 從會話中獲取憑證信息
-                from main import processor
-                
-                if hasattr(processor, 'oauth_credentials') and processor.oauth_credentials:
-                    try:
-                        # 使用Google API獲取用戶資訊
-                        request_session = google.auth.transport.requests.Request()
-                        
-                        # 檢查憑證是否過期，需要刷新
-                        if processor.oauth_credentials.expired and processor.oauth_credentials.refresh_token:
-                            logging.info("🔄 OAuth憑證已過期，嘗試刷新...")
-                            processor.oauth_credentials.refresh(request_session)
-                            logging.info("✅ OAuth憑證刷新成功")
-                            # 將刷新後的憑證更新回 session
-                            session['credentials'] = {
-                                'token': processor.oauth_credentials.token,
-                                'refresh_token': processor.oauth_credentials.refresh_token,
-                                'token_uri': processor.oauth_credentials.token_uri,
-                                'client_id': processor.oauth_credentials.client_id,
-                                'client_secret': processor.oauth_credentials.client_secret,
-                                'scopes': processor.oauth_credentials.scopes,
-                                'id_token': processor.oauth_credentials.id_token if hasattr(processor.oauth_credentials, 'id_token') else None
-                            }
-                            session.modified = True # 確保 Flask 儲存 session 的變更
-                            logging.info("✅ 已將刷新後的憑證更新回 session")
-                        
-                        # 獲取用戶資訊 - 首先嘗試從id_token中取得
-                        user = None
-                        
-                        # 優先透過id_token取得用戶資訊
-                        if hasattr(processor.oauth_credentials, 'id_token') and processor.oauth_credentials.id_token:
-                            try:
-                                id_info = id_token.verify_oauth2_token(
-                                    processor.oauth_credentials.id_token,
-                                    request_session,
-                                    processor.oauth_credentials.client_id
-                                )
-                                
-                                user = {
-                                    'id': id_info.get('sub'),
-                                    'name': id_info.get('name'),
-                                    'email': id_info.get('email'),
-                                    'picture': id_info.get('picture')
-                                }
-                            except Exception as e:
-                                logging.warning(f"透過id_token獲取用戶資訊失敗: {e}")
-                                
-                        # 如果無法透過id_token獲取或用戶資訊不完整，則嘗試userinfo API
-                        if not user or not (user.get('name') and user.get('email')):
-                            try:
-                                import requests
-                                userinfo_response = requests.get(
-                                    'https://www.googleapis.com/oauth2/v3/userinfo',
-                                    headers={'Authorization': f'Bearer {processor.oauth_credentials.token}'}
-                                )
-                                
-                                if userinfo_response.status_code == 200:
-                                    userinfo = userinfo_response.json()
-                                    user = {
-                                        'id': userinfo.get('sub'),
-                                        'name': userinfo.get('name'),
-                                        'email': userinfo.get('email'),
-                                        'picture': userinfo.get('picture')
-                                    }
-                                else:
-                                    logging.warning(f"userinfo API 返回狀態碼 {userinfo_response.status_code}")
-                            except Exception as e:
-                                logging.warning(f"透過userinfo API獲取用戶資訊失敗: {e}")
-                        
-                        # 如果成功取得用戶資訊，更新session
-                        if user and user.get('id') and user.get('name'):
-                            session['user_info'] = user
-                            return jsonify({
-                                'authenticated': True,
-                                'user': user
-                            })
-                    except Exception as e:
-                        logging.error(f"處理OAuth憑證時出錯: {e}")
-                
-                # 如果無法透過OAuth憑證獲取用戶資訊，使用session中的用戶資訊
-                user_info = session.get('user_info', {
-                    'id': 'unknown',
-                    'name': '未知用戶',
-                    'email': '',
-                    'picture': None
-                })
-                
-                return jsonify({
-                    'authenticated': True,
-                    'user': user_info
-                })
-                    
-            except Exception as e:
-                logging.error(f"獲取用戶資訊失敗: {str(e)}")
-                # 發生錯誤時返回基本資訊
-                return jsonify({
-                    'authenticated': True,
-                    'user': {
-                        'id': 'unknown',
-                        'name': '已認證用戶',
-                        'email': '',
-                        'picture': None
-                    },
-                    'error': str(e)
-                })
+        if is_authenticated and credentials:
+            # 如果令牌已過期，則刷新
+            credentials_obj = Credentials(
+                token=credentials['token'],
+                refresh_token=credentials['refresh_token'],
+                token_uri=credentials['token_uri'],
+                client_id=credentials['client_id'],
+                client_secret=credentials['client_secret'],
+                scopes=credentials['scopes']
+            )
+            
+            if credentials_obj.expired:
+                credentials_obj.refresh(google.auth.transport.requests.Request())
+                # 更新 session 中的令牌
+                session['credentials']['token'] = credentials_obj.token
+            
+            # 使用令牌獲取用戶信息
+            service = googleapiclient.discovery.build('oauth2', 'v2', credentials=credentials_obj)
+            user_info = service.userinfo().get().execute()
+            
+            return jsonify({
+                'success': True,
+                'authenticated': True,
+                'user': {
+                    'email': user_info.get('email'),
+                    'name': user_info.get('name'),
+                    'picture': user_info.get('picture')
+                }
+            })
         else:
             return jsonify({
+                'success': True,
                 'authenticated': False
             })
     except Exception as e:
-        logging.error(f"檢查認證狀態時出錯: {e}")
+        logging.error(f"❌ 檢查認證狀態失敗: {str(e)}")
         return jsonify({
-            'authenticated': False,
-            'error': str(e)
+            'success': False,
+            'error': f'檢查認證狀態失敗: {str(e)}'
         }), 500
 
 @auth_bp.route('/api/auth/logout', methods=['POST'])
 def auth_logout():
-    """登出用戶"""
+    """登出"""
     session.clear()
     return jsonify({'success': True})
 
 @auth_bp.route('/api/auth/userinfo', methods=['GET'])
 def api_userinfo():
-    """處理API獲取用戶資訊請求"""
+    """獲取用戶信息"""
     try:
-        # 檢查認證狀態
-        if 'credentials' not in session:
-            return jsonify({
-                'success': False, 
-                'error': 'User not authenticated',
-                'user': None
-            }), 401
-            
-        # 從session獲取憑證
-        credentials_dict = session.get('credentials')
-        credentials = google.oauth2.credentials.Credentials(**credentials_dict)
-        
-        # 重新取得用戶資訊
-        user_info = {}
-        
-        # 嘗試從id_token解析
-        if hasattr(credentials, 'id_token') and credentials.id_token:
-            try:
-                # 解析ID token
-                id_info = id_token.verify_oauth2_token(
-                    credentials.id_token, 
-                    google.auth.transport.requests.Request(), 
-                    os.environ.get('GOOGLE_CLIENT_ID')
-                )
-                
-                user_info = {
-                    'id': id_info.get('sub'),
-                    'email': id_info.get('email'),
-                    'name': id_info.get('name'),
-                    'picture': id_info.get('picture')
-                }
-            except Exception as e:
-                logging.warning(f"無法從ID token解析用戶資訊: {e}")
-        
-        # 如果id_token不可用或解析失敗，則嘗試使用userinfo API
-        if not user_info.get('id') or user_info.get('id') == 'unknown':
-            try:
-                # 使用credentials訪問Google People API
-                service = googleapiclient.discovery.build('oauth2', 'v2', credentials=credentials)
-                userinfo = service.userinfo().get().execute()
-                
-                user_info = {
-                    'id': userinfo.get('id'),
-                    'email': userinfo.get('email'),
-                    'name': userinfo.get('name'),
-                    'picture': userinfo.get('picture')
-                }
-            except Exception as e:
-                logging.error(f"無法從userinfo API獲取用戶資訊: {e}")
-        
-        # 更新session中的用戶資訊
-        if user_info.get('id') and user_info.get('id') != 'unknown':
-            session['user_info'] = user_info
-            
-            # 更新憑證
-            session['credentials'] = {
-                'token': credentials.token,
-                'refresh_token': credentials.refresh_token,
-                'token_uri': credentials.token_uri,
-                'client_id': credentials.client_id,
-                'client_secret': credentials.client_secret,
-                'scopes': credentials.scopes,
-                'id_token': credentials.id_token if hasattr(credentials, 'id_token') else None
-            }
-            
-            return jsonify({
-                'success': True,
-                'user': user_info
-            })
-        else:
+        if not session.get('authenticated', False):
             return jsonify({
                 'success': False,
-                'error': '無法獲取完整的用戶資訊',
-                'user': user_info
-            })
+                'error': '未認證'
+            }), 401
             
+        credentials_dict = session.get('credentials')
+        if not credentials_dict:
+            return jsonify({
+                'success': False,
+                'error': '未找到憑證信息'
+            }), 401
+            
+        credentials = Credentials(
+            token=credentials_dict['token'],
+            refresh_token=credentials_dict['refresh_token'],
+            token_uri=credentials_dict['token_uri'],
+            client_id=credentials_dict['client_id'],
+            client_secret=credentials_dict['client_secret'],
+            scopes=credentials_dict['scopes']
+        )
+        
+        # 如果令牌已過期，則刷新
+        if credentials.expired:
+            credentials.refresh(google.auth.transport.requests.Request())
+            # 更新 session 中的令牌
+            session['credentials']['token'] = credentials.token
+        
+        # 使用令牌獲取用戶信息
+        service = googleapiclient.discovery.build('oauth2', 'v2', credentials=credentials)
+        user_info = service.userinfo().get().execute()
+        
+        return jsonify({
+            'success': True,
+            'user': {
+                'email': user_info.get('email'),
+                'name': user_info.get('name'),
+                'picture': user_info.get('picture')
+            }
+        })
+        
     except Exception as e:
-        logging.error(f"獲取用戶資訊時出錯: {e}")
+        logging.error(f"❌ 獲取用戶信息失敗: {str(e)}")
         return jsonify({
             'success': False,
-            'error': str(e),
-            'user': None
+            'error': f'獲取用戶信息失敗: {str(e)}'
         }), 500
