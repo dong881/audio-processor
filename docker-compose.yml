@@ -32,6 +32,8 @@ services:
       - .env
     volumes:
       - .:/app
+      - ./templates:/app/templates
+      - ./static:/app/static
       - ./credentials:/app/credentials:ro
       - model_cache:/app/.cache
       - pip_cache:/root/.cache/pip

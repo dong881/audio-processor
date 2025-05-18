@@ -2,6 +2,7 @@ import os
 import logging
 from app import create_app
 from app.services.audio_processor import AudioProcessor
+import atexit
 
 def initialize_processor():
     """初始化AudioProcessor並處理可能的錯誤"""
@@ -23,17 +24,26 @@ def initialize_processor():
         processor.drive_service = None  # 確保標記為未初始化
         return processor
 
-# 初始化 AudioProcessor (全域實例，供所有模組使用)
-processor = initialize_processor()
+# 初始化音頻處理器
+audio_processor = initialize_processor()
 
-# 建立 Flask 應用實例
-app = create_app()
+# 註冊關閉函數
+def cleanup():
+    logging.info("正在關閉應用程序...")
+    audio_processor.shutdown_executor()
+    logging.info("應用程序已關閉")
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+atexit.register(cleanup)
 
-    port = int(os.getenv("PORT", 5000))
-    debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
+# 創建應用程序實例
+app = create_app(audio_processor)
+
+if __name__ == '__main__':
+    # 設置日誌
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     
-    logging.info(f"🚀 啟動伺服器於 port {port}...")
-    app.run(host='0.0.0.0', port=port, debug=debug, threaded=True) 
+    # 啟動應用程序
+    app.run(host='0.0.0.0', port=5000, debug=True) 
