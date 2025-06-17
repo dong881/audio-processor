@@ -448,7 +448,7 @@ p {
 /* 優化 toggle-thumb 樣式 */
 .toggle-thumb {
   position: absolute;
-  top: 2px;
+  top: 4px;
   left: 30px; /* Adjusted: Was 2px. 28px (label padding) + 2px (thumb offset within track) */
   width: 20px;
   height: 20px;
