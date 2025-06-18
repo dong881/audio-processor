@@ -669,3 +669,40 @@ def get_user_info_from_credentials(credentials):
     except Exception as e:
         logging.error(f"獲取用戶資訊時出錯: {e}")
         return None
+
+@auth_bp.route('/api/auth/logout', methods=['POST'])
+def auth_logout():
+    """用戶登出"""
+    try:
+        # 获取用户ID以清理Redis中的憑證
+        user_info = session.get('user_info', {})
+        user_id = user_info.get('id')
+        
+        # 清理Redis中的憑證
+        if user_id and user_id != 'unknown' and not user_id.startswith('temp_') and user_id != 'error_user':
+            try:
+                if credential_manager.delete_credentials(user_id):
+                    logging.info(f"✅ 已清理用戶 {user_id} 在 Redis 中的憑證")
+                else:
+                    logging.warning(f"⚠️ 清理用戶 {user_id} 在 Redis 中的憑證失敗")
+            except Exception as e:
+                logging.error(f"清理 Redis 憑證時發生錯誤: {e}")
+        
+        # 清除所有session數據
+        session.clear()
+        
+        # 清理AudioProcessor中的憑證
+        try:
+            from main import processor
+            if processor is not None:
+                processor.clear_credentials()
+                logging.info("✅ 已清理 AudioProcessor 中的憑證")
+        except Exception as e:
+            logging.warning(f"清理 AudioProcessor 憑證時發生錯誤: {e}")
+        
+        logging.info("✅ 用戶已成功登出")
+        return jsonify({'success': True, 'message': '登出成功'})
+        
+    except Exception as e:
+        logging.error(f"登出處理失敗: {str(e)}")
+        return jsonify({'success': False, 'error': f'登出失敗: {str(e)}'}), 500

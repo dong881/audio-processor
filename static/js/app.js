@@ -276,12 +276,31 @@ function handleLogin() {
 
 // 處理登出
 async function handleLogout() {
-    try {
-        await fetch(`${API_BASE_URL}/api/auth/logout`);
-        window.location.reload();
-    } catch (error) {
-        console.error('登出失敗:', error);
-        showError('登出失敗。請稍後再試。');
+    // 使用 auth.js 中的 logoutUser 函数，它包含了防止循環重定向的邏輯
+    if (typeof logoutUser === 'function') {
+        await logoutUser();
+    } else {
+        // 後備方案
+        try {
+            sessionStorage.setItem('logout_in_progress', 'true');
+            const response = await fetch(`${API_BASE_URL}/api/auth/logout`, {
+                method: 'POST'
+            });
+            
+            if (response.ok) {
+                setTimeout(() => {
+                    sessionStorage.removeItem('logout_in_progress');
+                    window.location.href = '/login';
+                }, 500);
+            } else {
+                sessionStorage.removeItem('logout_in_progress');
+                showError('登出失敗。請稍後再試。');
+            }
+        } catch (error) {
+            console.error('登出失敗:', error);
+            sessionStorage.removeItem('logout_in_progress');
+            showError('登出失敗。請稍後再試。');
+        }
     }
 }
 

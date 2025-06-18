@@ -182,6 +182,8 @@ p {
   transition: all 0.2s ease;
   text-align: center;
   min-width: 90px;
+  cursor: pointer; /* 确保鼠标悬停时显示指针 */
+  user-select: none; /* 防止文本选择 */
 }
 
 .nav-link#login-button:hover,
@@ -189,6 +191,8 @@ p {
   background-color: #5a6268;
   transform: translateY(-2px);
   box-shadow: var(--shadow-sm);
+  color: white; /* 确保悬停时文字颜色保持白色 */
+  text-decoration: none; /* 防止出现下划线 */
 }
 
 /***************************************
@@ -474,7 +478,7 @@ p {
   left: 52px; /* Adjusted: Was 24px. 28px (label padding) + 24px (thumb offset within track for 46px track) */
 }
 
-/* 優化過濾圖標 - 修正對齊問題 */
+/* 優化過濾器圖標 - 修正對齊問題 */
 .filter-icon {
   position: absolute;
   left: 8px; /* Positioned within the padding-left of toggle-label */

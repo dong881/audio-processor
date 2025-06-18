@@ -70,6 +70,9 @@ async function refreshUserInfo() {
 // Log out the user
 async function logoutUser() {
     try {
+        // 设置登出标记，防止自动重定向
+        sessionStorage.setItem('logout_in_progress', 'true');
+        
         const response = await fetch('/api/auth/logout', {
             method: 'POST'
         });
@@ -81,12 +84,24 @@ async function logoutUser() {
         const data = await response.json();
         
         if (data.success) {
-            window.location.href = '/login';
+            // 清除所有认证相关的存储
+            sessionStorage.removeItem('main_redirect_attempted');
+            sessionStorage.removeItem('login_redirect_attempted');
+            localStorage.removeItem('filter-recordings-enabled');
+            localStorage.removeItem('filter-pdf-enabled');
+            
+            // 延迟一点时间确保登出请求完成，然后跳转
+            setTimeout(() => {
+                sessionStorage.removeItem('logout_in_progress');
+                window.location.href = '/login';
+            }, 500);
         } else {
             console.error('Logout failed:', data.error);
+            sessionStorage.removeItem('logout_in_progress');
         }
     } catch (error) {
         console.error('Logout failed:', error);
+        sessionStorage.removeItem('logout_in_progress');
     }
 }
 
@@ -217,6 +232,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // 立即檢查認證狀態 - 修復認證狀態判斷
     console.log('開始檢查認證狀態...');
+    
+    // 检查是否正在进行登出操作
+    const logoutInProgress = sessionStorage.getItem('logout_in_progress');
+    if (logoutInProgress) {
+        console.log('登出操作正在进行中，跳过自动重定向');
+        return;
+    }
+    
     const user = await checkAuthStatus();
     
     if (user && user.id && user.id !== 'unknown') {
