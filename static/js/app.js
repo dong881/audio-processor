@@ -396,8 +396,10 @@ async function loadAudioFiles() {
         // 顯示載入狀態
         elements.fileList.innerHTML = `
             <div class="text-center">
-                <div class="spinner-border" role="status"></div> 
-                <p class="mt-3">正在載入您的音訊檔案...</p>
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="mt-2">正在載入您的音訊檔案...</p>
             </div>`;
 
         const queryParams = new URLSearchParams({
@@ -499,8 +501,10 @@ async function loadPdfFiles() {
         // 顯示載入狀態
         elements.attachmentList.innerHTML = `
             <div class="text-center">
-                <div class="spinner-border" role="status"></div> 
-                <p class="mt-3">正在載入您的 PDF 檔案...</p>
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="mt-2">正在載入您的 PDF 檔案...</p>
             </div>`;
 
         const queryParams = new URLSearchParams({
@@ -1081,11 +1085,11 @@ function toggleActiveJobs() {
         // 顯示任務列表並更新內容
         elements.jobsList.classList.remove('d-none');
         elements.jobsList.innerHTML = `
-            <div class="loading-container">
-                <div class="spinner-border" role="status">
-                    <span class="visually-hidden">載入中...</span>
+            <div class="text-center">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
                 </div>
-                <p>正在載入活躍任務...</p>
+                <p class="mt-2">正在載入活躍任務...</p>
             </div>
         `;
         fetchActiveJobs();
