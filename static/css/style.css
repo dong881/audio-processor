@@ -470,7 +470,7 @@ p {
 
 /* PDF過濾開關選中狀態 */
 #filter-pdf-toggle:checked + .toggle-label .toggle-track {
-  background: #0275d8;
+  background: #17a2b8; /* Changed to a more distinct teal color */
 }
 
 /* 改變滑塊位置 */

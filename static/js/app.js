@@ -147,8 +147,8 @@ function setupEventListeners() {
             // 保存偏好設置
             localStorage.setItem('filter-recordings-enabled', recordingsFilterEnabled);
             
-            // 使用更新的過濾設置重新載入檔案
-            loadDriveFiles();
+            // 只重新載入音訊檔案列表
+            loadAudioFiles();
         });
     }
     
@@ -184,8 +184,8 @@ function setupEventListeners() {
             // 保存偏好設置
             localStorage.setItem('filter-pdf-enabled', pdfFilterEnabled);
             
-            // 使用更新的過濾設置重新載入檔案
-            loadDriveFiles();
+            // 只重新載入 PDF 檔案列表
+            loadPdfFiles();
         });
     }
 
@@ -364,42 +364,149 @@ async function getFolderIdByName(folderName) {
     return null;
 }
 
-// 載入 Google Drive 檔案
+// 載入 Google Drive 檔案 - 修改為同時載入兩種類型
 async function loadDriveFiles() {
+    // 檢查是否已認證，未認證則不繼續載入
+    const authStatus = await checkAuthStatus();
+    if (!authStatus) {
+        showUnauthenticatedUI();
+        return;
+    }
+    
+    // 同時載入音訊檔案和 PDF 檔案
+    await Promise.all([
+        loadAudioFiles(),
+        loadPdfFiles()
+    ]);
+}
+
+// 載入音訊檔案列表
+async function loadAudioFiles() {
     const fileList = document.getElementById('file-list');
     if (!fileList) return;
     
     try {
-        // 檢查是否已認證，未認證則不繼續載入
+        // 檢查是否已認證
         const authStatus = await checkAuthStatus();
         if (!authStatus) {
             showUnauthenticatedUI();
             return;
         }
         
-        if (elements.fileList) {
-            elements.fileList.innerHTML = `
-                <div class="text-center">
-                    <div class="spinner-border" role="status"></div> 
-                    <p class="mt-3">正在載入您的檔案...</p>
-                </div>`;
-        }
-        
-        if (elements.attachmentList) {
-            elements.attachmentList.innerHTML = `
-                <div class="text-center">
-                    <div class="spinner-border" role="status"></div> 
-                    <p class="mt-3">正在載入您的附件...</p>
-                </div>`;
-        }
+        // 顯示載入狀態
+        elements.fileList.innerHTML = `
+            <div class="text-center">
+                <div class="spinner-border" role="status"></div> 
+                <p class="mt-3">正在載入您的音訊檔案...</p>
+            </div>`;
 
         const queryParams = new URLSearchParams({
-            recordingsFilter: recordingsFilterEnabled ? 'enabled' : 'disabled',
-            pdfFilter: pdfFilterEnabled ? 'enabled' : 'disabled'
+            fileType: 'audio',
+            recordingsFilter: recordingsFilterEnabled ? 'enabled' : 'disabled'
         });
         if (recordingsFilterEnabled) {
             queryParams.append('recordingsFolderName', RECORDINGS_FOLDER);
         }
+        
+        const response = await fetch(`${API_BASE_URL}/drive/files?${queryParams.toString()}`);
+        
+        if (!response.ok) {
+            if (response.status === 401) {
+                throw new Error(`401 Unauthorized: Failed to load audio files. Session may be invalid.`);
+            }
+            throw new Error(`HTTP error ${response.status}: Failed to load audio files.`);
+        }
+        
+        const data = await response.json();
+        
+        // 過濾音訊檔案
+        let audioFiles = data.files.filter(file => isAudioFile(file.mimeType));
+        
+        console.log("載入的音訊檔案數量:", audioFiles.length);
+        
+        // 填充音訊文件列表
+        if (audioFiles.length === 0) {
+            elements.fileList.innerHTML = `
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle-fill me-2"></i>
+                    ${recordingsFilterEnabled ? 
+                        `未在 ${RECORDINGS_FOLDER} 資料夾中找到音訊檔案。請上傳音訊檔案到此資料夾。` : 
+                        '未找到音訊檔案。請上傳音訊檔案到您的 Google Drive.'}
+                </div>`;
+        } else {
+            elements.fileList.innerHTML = '';
+            audioFiles.forEach(file => {
+                const option = document.createElement('div');
+                option.className = 'file-option';
+                option.innerHTML = `
+                    <input type="radio" name="audioFile" 
+                           id="file-${file.id}" value="${file.id}" data-filename="${file.name}">
+                    <div class="file-icon">
+                        <i class="bi bi-file-earmark-music"></i>
+                    </div>
+                    <div class="file-details">
+                        <div class="file-name">${file.name}</div>
+                        <div class="file-size">${formatFileSize(file.size)}</div>
+                    </div>
+                `;
+                // 點擊整個區域時選中
+                option.addEventListener('click', function() {
+                    const input = this.querySelector('input');
+                    input.checked = true;
+                    
+                    // 移除其他選擇項的選中樣式
+                    document.querySelectorAll('.file-option').forEach(el => {
+                        el.classList.remove('selected');
+                    });
+                    
+                    // 添加選中樣式
+                    this.classList.add('selected');
+                });
+                elements.fileList.appendChild(option);
+            });
+        }
+    } catch (error) {
+        console.error('載入音訊檔案失敗:', error);
+        
+        let displayErrorMessage = error.message || '載入音訊檔案失敗。請重試。';
+
+        if (error.message && error.message.startsWith('401 Unauthorized')) {
+            displayErrorMessage = '載入 Google Drive 音訊檔案失敗，您的登入可能已失效。請嘗試重新登入。';
+            showUnauthenticatedUI();
+        }
+
+        elements.fileList.innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle-fill me-2" style="font-size: 1.5rem;"></i>
+                ${displayErrorMessage}
+            </div>`;
+    }
+}
+
+// 載入 PDF 檔案列表
+async function loadPdfFiles() {
+    const attachmentList = document.getElementById('attachment-list');
+    if (!attachmentList) return;
+    
+    try {
+        // 檢查是否已認證
+        const authStatus = await checkAuthStatus();
+        if (!authStatus) {
+            showUnauthenticatedUI();
+            return;
+        }
+        
+        // 顯示載入狀態
+        elements.attachmentList.innerHTML = `
+            <div class="text-center">
+                <div class="spinner-border" role="status"></div> 
+                <p class="mt-3">正在載入您的 PDF 檔案...</p>
+            </div>`;
+
+        const queryParams = new URLSearchParams({
+            fileType: 'pdf',
+            pdfFilter: pdfFilterEnabled ? 'enabled' : 'disabled'
+        });
         if (pdfFilterEnabled) {
             queryParams.append('pdfFolderName', DOCUMENTS_FOLDER);
         }
@@ -408,177 +515,117 @@ async function loadDriveFiles() {
         
         if (!response.ok) {
             if (response.status === 401) {
-                // For 401, throw an error that specifically indicates this,
-                // so the catch block can identify it.
-                throw new Error(`401 Unauthorized: Failed to load Drive files. Session may be invalid.`);
+                throw new Error(`401 Unauthorized: Failed to load PDF files. Session may be invalid.`);
             }
-            throw new Error(`HTTP error ${response.status}: Failed to load Drive files.`);
+            throw new Error(`HTTP error ${response.status}: Failed to load PDF files.`);
         }
         
         const data = await response.json();
         
-        // 分離音訊檔案和PDF檔案
-        let audioFiles = data.files.filter(file => isAudioFile(file.mimeType));
+        // 過濾 PDF 檔案
         let pdfFiles = data.files.filter(file => file.mimeType === 'application/pdf');
         
-        console.log("過濾前總音訊檔案:", audioFiles.length);
-        console.log("過濾前總PDF檔案:", pdfFiles.length);
-        
-        // 填充音訊文件列表
-        if (elements.fileList) {
-            if (audioFiles.length === 0) {
-                elements.fileList.innerHTML = `
-                    <div class="alert alert-info">
-                        <i class="bi bi-info-circle-fill me-2"></i>
-                        ${recordingsFilterEnabled ? 
-                            `未在 ${RECORDINGS_FOLDER} 資料夾中找到音訊檔案。請上傳音訊檔案到此資料夾。` : 
-                            '未找到音訊檔案。請上傳音訊檔案到您的 Google Drive.'}
-                    </div>`;
-            } else {
-                elements.fileList.innerHTML = '';
-                audioFiles.forEach(file => {
-                    const option = document.createElement('div');
-                    option.className = 'file-option';
-                    option.innerHTML = `
-                        <input type="radio" name="audioFile" 
-                               id="file-${file.id}" value="${file.id}" data-filename="${file.name}">
-                        <div class="file-icon">
-                            <i class="bi bi-file-earmark-music"></i>
-                        </div>
-                        <div class="file-details">
-                            <div class="file-name">${file.name}</div>
-                            <div class="file-size">${formatFileSize(file.size)}</div>
-                        </div>
-                    `;
-                    // 點擊整個區域時選中
-                    option.addEventListener('click', function() {
-                        const input = this.querySelector('input');
-                        input.checked = true;
-                        
-                        // 移除其他選擇項的選中樣式
-                        document.querySelectorAll('.file-option').forEach(el => {
-                            el.classList.remove('selected');
-                        });
-                        
-                        // 添加選中樣式
-                        this.classList.add('selected');
-                    });
-                    elements.fileList.appendChild(option);
-                });
-            }
-        }
+        console.log("載入的 PDF 檔案數量:", pdfFiles.length);
         
         // 填充附件文件列表
-        if (elements.attachmentList) {
-            if (pdfFiles.length === 0) {
-                elements.attachmentList.innerHTML = `
-                    <div class="alert alert-info">
-                        <i class="bi bi-info-circle-fill me-2" style="font-size: 1.5rem;"></i>
-                        ${pdfFilterEnabled ? 
-                            `未在 ${DOCUMENTS_FOLDER} 資料夾中找到 PDF 檔案。附件是選用的。` : 
-                            '未找到 PDF 檔案。附件是選用的。'}
-                    </div>`;
-            } else {
-                elements.attachmentList.innerHTML = '';
-                // 添加"無附件"選項
-                const noneOption = document.createElement('div');
-                noneOption.className = 'attachment-option none-option selected'; // Default selected
-                noneOption.innerHTML = `
-                    <input type="checkbox" id="attachment-none" value="" data-none="true" checked>
+        if (pdfFiles.length === 0) {
+            elements.attachmentList.innerHTML = `
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle-fill me-2" style="font-size: 1.5rem;"></i>
+                    ${pdfFilterEnabled ? 
+                        `未在 ${DOCUMENTS_FOLDER} 資料夾中找到 PDF 檔案。附件是選用的。` : 
+                        '未找到 PDF 檔案。附件是選用的。'}
+                </div>`;
+        } else {
+            elements.attachmentList.innerHTML = '';
+            // 添加"無附件"選項
+            const noneOption = document.createElement('div');
+            noneOption.className = 'attachment-option none-option selected'; // Default selected
+            noneOption.innerHTML = `
+                <input type="checkbox" id="attachment-none" value="" data-none="true" checked>
+                <div class="file-icon">
+                    <i class="bi bi-slash-circle"></i>
+                </div>
+                <div class="file-details">
+                    <div class="file-name">無附件</div>
+                    <div class="file-size">不選擇附件檔案</div>
+                </div>
+            `;
+            
+            noneOption.addEventListener('click', function() {
+                const input = this.querySelector('input');
+                input.checked = true; // Clicking "None" always selects it
+                this.classList.add('selected');
+                
+                // 取消所有其他附件的選擇
+                document.querySelectorAll('.attachment-option:not(.none-option)').forEach(el => {
+                    el.classList.remove('selected');
+                    el.querySelector('input').checked = false;
+                });
+            });
+            elements.attachmentList.appendChild(noneOption);
+            
+            // 添加PDF檔案
+            pdfFiles.forEach(file => {
+                const option = document.createElement('div');
+                option.className = 'attachment-option';
+                option.innerHTML = `
+                    <input type="checkbox" 
+                           id="attachment-${file.id}" value="${file.id}" data-filename="${file.name}">
                     <div class="file-icon">
-                        <i class="bi bi-slash-circle"></i>
+                        <i class="bi bi-file-earmark-pdf"></i>
                     </div>
                     <div class="file-details">
-                        <div class="file-name">無附件</div>
-                        <div class="file-size">不選擇附件檔案</div>
+                        <div class="file-name">${file.name}</div>
+                        <div class="file-size">${formatFileSize(file.size)}</div>
                     </div>
                 `;
                 
-                noneOption.addEventListener('click', function() {
+                option.addEventListener('click', function() {
                     const input = this.querySelector('input');
-                    input.checked = true; // Clicking "None" always selects it
-                    this.classList.add('selected');
+                    input.checked = !input.checked; // Toggle current PDF's checked state
                     
-                    // 取消所有其他附件的選擇
-                    document.querySelectorAll('.attachment-option:not(.none-option)').forEach(el => {
-                        el.classList.remove('selected');
-                        el.querySelector('input').checked = false;
-                    });
-                });
-                elements.attachmentList.appendChild(noneOption);
-                
-                // 添加PDF檔案
-                pdfFiles.forEach(file => {
-                    const option = document.createElement('div');
-                    option.className = 'attachment-option';
-                    option.innerHTML = `
-                        <input type="checkbox" 
-                               id="attachment-${file.id}" value="${file.id}" data-filename="${file.name}">
-                        <div class="file-icon">
-                            <i class="bi bi-file-earmark-pdf"></i>
-                        </div>
-                        <div class="file-details">
-                            <div class="file-name">${file.name}</div>
-                            <div class="file-size">${formatFileSize(file.size)}</div>
-                        </div>
-                    `;
-                    
-                    option.addEventListener('click', function() {
-                        const input = this.querySelector('input');
-                        input.checked = !input.checked; // Toggle current PDF's checked state
+                    if (input.checked) {
+                        this.classList.add('selected');
+                        // 選中了一個PDF附件，取消"無附件"的選擇
+                        const noneOptionEl = document.querySelector('.attachment-option.none-option');
+                        if (noneOptionEl) {
+                            noneOptionEl.classList.remove('selected');
+                            noneOptionEl.querySelector('input').checked = false;
+                        }
+                    } else {
+                        this.classList.remove('selected');
+                        // 如果取消選中後沒有任何其他PDF被選中，則自動選中"無附件"
+                        const anyPdfSelected = Array.from(document.querySelectorAll('.attachment-option:not(.none-option) input[type="checkbox"]'))
+                            .some(el => el.checked);
                         
-                        if (input.checked) {
-                            this.classList.add('selected');
-                            // 選中了一個PDF附件，取消"無附件"的選擇
+                        if (!anyPdfSelected) {
                             const noneOptionEl = document.querySelector('.attachment-option.none-option');
                             if (noneOptionEl) {
-                                noneOptionEl.classList.remove('selected');
-                                noneOptionEl.querySelector('input').checked = false;
-                            }
-                        } else {
-                            this.classList.remove('selected');
-                            // 如果取消選中後沒有任何其他PDF被選中，則自動選中"無附件"
-                            const anyPdfSelected = Array.from(document.querySelectorAll('.attachment-option:not(.none-option) input[type="checkbox"]'))
-                                .some(el => el.checked);
-                            
-                            if (!anyPdfSelected) {
-                                const noneOptionEl = document.querySelector('.attachment-option.none-option');
-                                if (noneOptionEl) {
-                                    noneOptionEl.classList.add('selected');
-                                    noneOptionEl.querySelector('input').checked = true;
-                                }
+                                noneOptionEl.classList.add('selected');
+                                noneOptionEl.querySelector('input').checked = true;
                             }
                         }
-                    });
-                    elements.attachmentList.appendChild(option);
+                    }
                 });
-            }
+                elements.attachmentList.appendChild(option);
+            });
         }
     } catch (error) {
-        console.error('載入檔案失敗:', error);
+        console.error('載入 PDF 檔案失敗:', error);
         
-        let displayErrorMessage = error.message || '載入檔案失敗。請重試。';
+        let displayErrorMessage = error.message || '載入 PDF 檔案失敗。請重試。';
 
         if (error.message && error.message.startsWith('401 Unauthorized')) {
-            // Specific handling for the 401 error from this fetch
-            displayErrorMessage = '載入 Google Drive 檔案失敗，您的登入可能已失效。請嘗試重新登入。';
-            showUnauthenticatedUI(); // Revert to unauthenticated UI
+            displayErrorMessage = '載入 Google Drive PDF 檔案失敗，您的登入可能已失效。請嘗試重新登入。';
+            showUnauthenticatedUI();
         }
 
-        if (elements.fileList) {
-            elements.fileList.innerHTML = `
-                <div class="alert alert-danger">
-                    <i class="bi bi-exclamation-triangle-fill me-2" style="font-size: 1.5rem;"></i>
-                    ${displayErrorMessage}
-                </div>`;
-        }
-        if (elements.attachmentList) {
-            elements.attachmentList.innerHTML = `
-                <div class="alert alert-danger">
-                    <i class="bi bi-exclamation-triangle-fill me-2" style="font-size: 1.5rem;"></i>
-                    ${displayErrorMessage}
-                </div>`;
-        }
+        elements.attachmentList.innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle-fill me-2" style="font-size: 1.5rem;"></i>
+                ${displayErrorMessage}
+            </div>`;
     }
 }
 
