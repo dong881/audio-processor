@@ -5,6 +5,7 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    command: redis-server --appendonly yes --appendfsync everysec
     restart: unless-stopped
 
   audio-processor:
@@ -43,3 +44,4 @@ volumes:
   pip_cache:
   model_cache:
   redis_data:
+    driver: local
