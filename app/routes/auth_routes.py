@@ -93,7 +93,12 @@ def auth_google():
         try:
             flow = Flow.from_client_secrets_file(
                 client_secrets_file,
-                scopes=['https://www.googleapis.com/auth/drive.readonly'],
+                scopes=[
+                    'https://www.googleapis.com/auth/drive.readonly',
+                    'https://www.googleapis.com/auth/userinfo.profile',
+                    'https://www.googleapis.com/auth/userinfo.email',
+                    'openid'
+                ],
                 redirect_uri=redirect_uri
             )
             
@@ -199,7 +204,12 @@ def auth_callback():
         
         flow = Flow.from_client_secrets_file(
             client_secrets_file,
-            scopes=['https://www.googleapis.com/auth/drive.readonly'],
+            scopes=[
+                'https://www.googleapis.com/auth/drive.readonly',
+                'https://www.googleapis.com/auth/userinfo.profile',
+                'https://www.googleapis.com/auth/userinfo.email',
+                'openid'
+            ],
             state=state,
             redirect_uri=redirect_uri
         )
@@ -212,67 +222,106 @@ def auth_callback():
             session['authenticated'] = True
             logging.info("✅ OAuth 認證狀態已設置為 True")
 
-            # 保存用戶信息到session
+            # 保存用戶信息到session - 改進的用戶資訊獲取邏輯
+            user_info = None
+            
             try:
-                google_client_id = credentials.client_id
+                # 方法1: 嘗試從 id_token 解析用戶資訊
+                if hasattr(credentials, 'id_token') and credentials.id_token:
+                    try:
+                        request_session_for_user_info = google.auth.transport.requests.Request()
+                        id_info = id_token.verify_oauth2_token(
+                            credentials.id_token,
+                            request_session_for_user_info,
+                            credentials.client_id
+                        )
+                        user_info = {
+                            'id': id_info.get('sub'),
+                            'name': id_info.get('name'),
+                            'email': id_info.get('email'),
+                            'picture': id_info.get('picture')
+                        }
+                        logging.info(f"✅ 從 id_token 獲取用戶資訊成功: {user_info.get('name')}")
+                    except Exception as e:
+                        logging.warning(f"從 id_token 解析用戶資訊失敗: {e}")
                 
-                request_session_for_user_info = google.auth.transport.requests.Request()
-                id_info = id_token.verify_oauth2_token(
-                    credentials.id_token,
-                    request_session_for_user_info,
-                    google_client_id
-                )
-                user_info = {
-                    'id': id_info.get('sub'),
-                    'name': id_info.get('name', '未知用戶'),
-                    'email': id_info.get('email', ''),
-                    'picture': id_info.get('picture')
-                }
-                session['user_info'] = user_info
-                logging.info(f"✅ 用戶資訊已獲取並存儲到 session: {user_info.get('name')}")
-                
-                # *** 新增：保存憑證到 Redis ***
-                user_id = user_info.get('id')
-                if user_id and user_id != 'unknown':
-                    if credential_manager.save_credentials(user_id, credentials):
-                        logging.info(f"✅ 用戶 {user_id} 的憑證已保存到 Redis")
-                        # 延長存儲時間到 60 天
-                        credential_manager.extend_credential_expiry(user_id, 60)
-                    else:
-                        logging.warning("⚠️ 憑證保存到 Redis 失敗，但認證仍然有效")
+                # 方法2: 如果 id_token 方法失敗，使用 Google People API
+                if not user_info or not user_info.get('name'):
+                    try:
+                        import requests
                         
+                        # 使用 userinfo endpoint
+                        response = requests.get(
+                            'https://www.googleapis.com/oauth2/v2/userinfo',
+                            headers={'Authorization': f'Bearer {credentials.token}'},
+                            timeout=10
+                        )
+                        
+                        if response.status_code == 200:
+                            userinfo_data = response.json()
+                            user_info = {
+                                'id': userinfo_data.get('id'),
+                                'name': userinfo_data.get('name'),
+                                'email': userinfo_data.get('email'),
+                                'picture': userinfo_data.get('picture')
+                            }
+                            logging.info(f"✅ 從 userinfo API 獲取用戶資訊成功: {user_info.get('name')}")
+                        else:
+                            logging.error(f"userinfo API 請求失敗: {response.status_code}")
+                    except Exception as e:
+                        logging.warning(f"從 userinfo API 獲取用戶資訊失敗: {e}")
+                
+                # 方法3: 最後嘗試使用 Google API Client
+                if not user_info or not user_info.get('name'):
+                    try:
+                        import googleapiclient.discovery
+                        service = googleapiclient.discovery.build('oauth2', 'v2', credentials=credentials)
+                        profile = service.userinfo().get().execute()
+                        
+                        user_info = {
+                            'id': profile.get('id'),
+                            'name': profile.get('name'),
+                            'email': profile.get('email'),
+                            'picture': profile.get('picture')
+                        }
+                        logging.info(f"✅ 從 Google API Client 獲取用戶資訊成功: {user_info.get('name')}")
+                    except Exception as e:
+                        logging.warning(f"從 Google API Client 獲取用戶資訊失敗: {e}")
+                
+                # 驗證用戶資訊完整性
+                if user_info and user_info.get('id') and user_info.get('name'):
+                    session['user_info'] = user_info
+                    logging.info(f"✅ 完整用戶資訊已存儲: ID={user_info.get('id')}, Name={user_info.get('name')}")
+                else:
+                    # 如果所有方法都失敗，使用基本資訊
+                    fallback_info = {
+                        'id': 'temp_' + str(hash(credentials.token))[-8:],
+                        'name': '已認證用戶',
+                        'email': '',
+                        'picture': None
+                    }
+                    session['user_info'] = fallback_info
+                    logging.warning(f"⚠️ 無法獲取完整用戶資訊，使用後備資訊: {fallback_info}")
+                    
             except Exception as e:
-                logging.warning(f"⚠️ 在 auth_callback 中獲取用戶資訊失敗: {str(e)}. Session user_info 可能不完整。")
-                session['user_info'] = { 
-                    'id': 'unknown', 
-                    'name': '資訊獲取失敗', 
-                    'email': '', 
+                logging.error(f"獲取用戶資訊過程中發生錯誤: {str(e)}")
+                # 設置後備用戶資訊
+                session['user_info'] = {
+                    'id': 'error_user',
+                    'name': '認證用戶',
+                    'email': '',
                     'picture': None
                 }
             
-            # 保存憑證到 session（保持現有功能）
-            session['credentials'] = {
-                'token': credentials.token,
-                'refresh_token': credentials.refresh_token,
-                'token_uri': credentials.token_uri,
-                'client_id': credentials.client_id,
-                'client_secret': credentials.client_secret,
-                'scopes': credentials.scopes,
-                'id_token': credentials.id_token if hasattr(credentials, 'id_token') else None 
-            }
-            logging.info("✅ OAuth 憑證已轉換並存儲到 session")
-            
-            # 使用OAuth憑證初始化Drive服務
-            try:
-                if processor is not None:
-                    if processor.set_oauth_credentials(credentials):
-                        logging.info("✅ 已成功將OAuth憑證設置到AudioProcessor")
-                    else:
-                        logging.error("❌ 設置OAuth憑證到AudioProcessor失敗")
-            except Exception as e:
-                logging.error(f"⚠️ 設置OAuth憑證到AudioProcessor時發生錯誤: {str(e)}")
-            
-            logging.info("✅ OAuth 認證成功，重定向到應用主頁")
+            # *** 保存憑證到 Redis ***
+            user_id = session['user_info'].get('id')
+            if user_id and not user_id.startswith('temp_') and user_id != 'error_user':
+                if credential_manager.save_credentials(user_id, credentials):
+                    logging.info(f"✅ 用戶 {user_id} 的憑證已保存到 Redis")
+                    credential_manager.extend_credential_expiry(user_id, 60)
+                else:
+                    logging.warning("⚠️ 憑證保存到 Redis 失敗，但認證仍然有效")
+                        
             return redirect('/')
 
         except google.auth.exceptions.RefreshError as re:
@@ -339,7 +388,12 @@ def auth_token():
         try:
             flow = Flow.from_client_secrets_file(
                 client_secrets_file,
-                scopes=['https://www.googleapis.com/auth/drive.readonly'],
+                scopes=[
+                    'https://www.googleapis.com/auth/drive.readonly',
+                    'https://www.googleapis.com/auth/userinfo.profile',
+                    'https://www.googleapis.com/auth/userinfo.email',
+                    'openid'
+                ],
                 state=state,
                 redirect_uri=redirect_uri
             )
@@ -401,150 +455,102 @@ def auth_status():
         user_info = session.get('user_info', {})
         user_id = user_info.get('id')
         
-        # *** 新增：嘗試從 Redis 載入憑證 ***
-        if user_id and user_id != 'unknown':
+        # *** 嘗試從 Redis 載入憑證 - 修復 "can't set attribute" 錯誤 ***
+        if user_id and user_id != 'unknown' and not user_id.startswith('temp_') and user_id != 'error_user':
             try:
                 valid_credentials = credential_manager.get_valid_credentials(user_id)
                 if valid_credentials:
                     logging.info(f"✅ 從 Redis 載入用戶 {user_id} 的有效憑證")
-                    # 更新 session 中的憑證
-                    session['credentials'] = {
-                        'token': valid_credentials.token,
-                        'refresh_token': valid_credentials.refresh_token,
-                        'token_uri': valid_credentials.token_uri,
-                        'client_id': valid_credentials.client_id,
-                        'client_secret': valid_credentials.client_secret,
-                        'scopes': valid_credentials.scopes,
-                        'id_token': valid_credentials.id_token if hasattr(valid_credentials, 'id_token') else None
-                    }
+                    
+                    # 嘗試刷新用戶資訊 - 但不依賴於設置憑證到 processor
+                    try:
+                        refreshed_user_info = get_user_info_from_credentials(valid_credentials)
+                        if refreshed_user_info and refreshed_user_info.get('name'):
+                            user_info = refreshed_user_info
+                            session['user_info'] = user_info
+                            logging.info(f"✅ 用戶資訊已刷新: {user_info.get('name')}")
+                    except Exception as refresh_error:
+                        logging.warning(f"刷新用戶資訊時出錯，但繼續使用現有資訊: {refresh_error}")
+                    
+                    # 嘗試設置到 AudioProcessor - 但不讓錯誤影響認證狀態
+                    try:
+                        from main import processor
+                        if processor is not None:
+                            processor.set_oauth_credentials(valid_credentials)
+                            logging.info("✅ 憑證已設置到 AudioProcessor")
+                    except Exception as processor_error:
+                        logging.warning(f"設置憑證到 AudioProcessor 失敗，但不影響認證狀態: {processor_error}")
+                    
                     session['authenticated'] = True
                     authenticated = True
                     
-                    # 設置到 AudioProcessor
-                    from main import processor
-                    if processor is not None:
-                        processor.set_oauth_credentials(valid_credentials)
-                        
                 elif not authenticated:
-                    # 如果 Redis 中沒有憑證且 session 也未認證，則確實未認證
                     logging.info(f"用戶 {user_id} 沒有有效憑證")
                     return jsonify({'authenticated': False})
                     
             except Exception as e:
                 logging.error(f"從 Redis 載入憑證時出錯: {e}")
-                # 繼續使用 session 中的認證狀態
+                # 不讓 Redis 錯誤影響基本認證狀態檢查
         
         if authenticated:
-            # ...existing user info logic...
-            try:
-                from main import processor
-                
-                if hasattr(processor, 'oauth_credentials') and processor.oauth_credentials:
-                    try:
-                        request_session = google.auth.transport.requests.Request()
-                        
-                        if processor.oauth_credentials.expired and processor.oauth_credentials.refresh_token:
-                            logging.info("🔄 OAuth憑證已過期，嘗試刷新...")
-                            processor.oauth_credentials.refresh(request_session)
-                            logging.info("✅ OAuth憑證刷新成功")
-                            
-                            # *** 新增：刷新後重新保存到 Redis ***
-                            if user_id and user_id != 'unknown':
-                                credential_manager.save_credentials(user_id, processor.oauth_credentials)
-                            
-                            session['credentials'] = {
-                                'token': processor.oauth_credentials.token,
-                                'refresh_token': processor.oauth_credentials.refresh_token,
-                                'token_uri': processor.oauth_credentials.token_uri,
-                                'client_id': processor.oauth_credentials.client_id,
-                                'client_secret': processor.oauth_credentials.client_secret,
-                                'scopes': processor.oauth_credentials.scopes,
-                                'id_token': processor.oauth_credentials.id_token if hasattr(processor.oauth_credentials, 'id_token') else None
-                            }
-                            session.modified = True
-                            logging.info("✅ 已將刷新後的憑證更新回 session")
-                        
-                        # 獲取用戶資訊 - 首先嘗試從id_token中取得
-                        user = None
-                        
-                        # 優先透過id_token取得用戶資訊
-                        if hasattr(processor.oauth_credentials, 'id_token') and processor.oauth_credentials.id_token:
-                            try:
-                                id_info = id_token.verify_oauth2_token(
-                                    processor.oauth_credentials.id_token,
-                                    request_session,
-                                    processor.oauth_credentials.client_id
-                                )
-                                
-                                user = {
-                                    'id': id_info.get('sub'),
-                                    'name': id_info.get('name'),
-                                    'email': id_info.get('email'),
-                                    'picture': id_info.get('picture')
-                                }
-                            except Exception as e:
-                                logging.warning(f"透過id_token獲取用戶資訊失敗: {e}")
-                                
-                        # 如果無法透過id_token獲取或用戶資訊不完整，則嘗試userinfo API
-                        if not user or not (user.get('name') and user.get('email')):
-                            try:
-                                import requests
-                                userinfo_response = requests.get(
-                                    'https://www.googleapis.com/oauth2/v3/userinfo',
-                                    headers={'Authorization': f'Bearer {processor.oauth_credentials.token}'}
-                                )
-                                
-                                if userinfo_response.status_code == 200:
-                                    userinfo = userinfo_response.json()
-                                    user = {
-                                        'id': userinfo.get('sub'),
-                                        'name': userinfo.get('name'),
-                                        'email': userinfo.get('email'),
-                                        'picture': userinfo.get('picture')
-                                    }
-                                else:
-                                    logging.warning(f"userinfo API 返回狀態碼 {userinfo_response.status_code}")
-                            except Exception as e:
-                                logging.warning(f"透過userinfo API獲取用戶資訊失敗: {e}")
-                        
-                        # 如果成功取得用戶資訊，更新session
-                        if user and user.get('id') and user.get('name'):
-                            session['user_info'] = user
-                            return jsonify({
-                                'authenticated': True,
-                                'user': user
-                            })
-                    except Exception as e:
-                        logging.error(f"處理OAuth憑證時出錯: {e}")
-                
-                user_info = session.get('user_info', {
-                    'id': 'unknown',
-                    'name': '未知用戶',
-                    'email': '',
-                    'picture': None
-                })
-                
-                return jsonify({
-                    'authenticated': True,
-                    'user': user_info
-                })
+            # 確保用戶資訊完整性
+            if not user_info.get('name') or user_info.get('name') in ['資訊獲取失敗', '未知用戶']:
+                try:
+                    # 嘗試重新獲取用戶資訊 - 修復憑證重建邏輯
+                    refreshed_user_info = None
                     
-            except Exception as e:
-                logging.error(f"獲取用戶資訊失敗: {str(e)}")
-                return jsonify({
-                    'authenticated': True,
-                    'user': {
-                        'id': 'unknown',
-                        'name': '已認證用戶',
-                        'email': '',
-                        'picture': None
-                    },
-                    'error': str(e)
-                })
-        else:
+                    # 嘗試從 session 中的憑證資訊重新獲取
+                    session_credentials = session.get('credentials')
+                    if session_credentials:
+                        try:
+                            # 修復：正確重建憑證對象
+                            credential_kwargs = {
+                                'token': session_credentials.get('token'),
+                                'refresh_token': session_credentials.get('refresh_token'),
+                                'token_uri': session_credentials.get('token_uri'),
+                                'client_id': session_credentials.get('client_id'),
+                                'client_secret': session_credentials.get('client_secret'),
+                                'scopes': session_credentials.get('scopes')
+                            }
+                            
+                            # 如果有過期時間，添加到參數中
+                            if session_credentials.get('expiry'):
+                                try:
+                                    if isinstance(session_credentials['expiry'], str):
+                                        credential_kwargs['expiry'] = datetime.fromisoformat(session_credentials['expiry'])
+                                    else:
+                                        credential_kwargs['expiry'] = session_credentials['expiry']
+                                except Exception:
+                                    pass  # 忽略過期時間解析錯誤
+                            
+                            creds = Credentials(**credential_kwargs)
+                            refreshed_user_info = get_user_info_from_credentials(creds)
+                        except Exception as cred_error:
+                            logging.warning(f"從 session 憑證重新獲取用戶資訊失敗: {cred_error}")
+                    
+                    if refreshed_user_info and refreshed_user_info.get('name'):
+                        user_info = refreshed_user_info
+                        session['user_info'] = user_info
+                        logging.info(f"✅ 用戶資訊重新獲取成功: {user_info.get('name')}")
+                        
+                except Exception as e:
+                    logging.error(f"重新獲取用戶資訊失敗: {e}")
+            
+            # 確保返回完整的用戶對象，包括 picture URL
+            complete_user_info = {
+                'id': user_info.get('id', 'unknown'),
+                'name': user_info.get('name', '已認證用戶'),
+                'email': user_info.get('email', ''),
+                'picture': user_info.get('picture')  # 確保包含 picture
+            }
+            
             return jsonify({
-                'authenticated': False
+                'authenticated': True,
+                'user': complete_user_info
             })
+        else:
+            return jsonify({'authenticated': False})
+            
     except Exception as e:
         logging.error(f"檢查認證狀態時出錯: {e}")
         return jsonify({
@@ -552,162 +558,114 @@ def auth_status():
             'error': str(e)
         }), 500
 
-@auth_bp.route('/api/auth/logout', methods=['POST'])
-def auth_logout():
-    """登出用戶並清理憑證"""
+# 新增：專門用於刷新用戶資訊的 API 端點
+@auth_bp.route('/api/auth/userinfo')
+def get_userinfo():
+    """獲取用戶資訊的專用端點"""
     try:
-        # *** 新增：從 Redis 刪除憑證 ***
+        if not session.get('authenticated'):
+            return jsonify({'success': False, 'error': '用戶未認證'})
+        
         user_info = session.get('user_info', {})
         user_id = user_info.get('id')
         
+        # 嘗試從不同來源刷新用戶資訊
+        refreshed_info = None
+        
+        # 方法1: 從 Redis 憑證獲取
         if user_id and user_id != 'unknown':
-            if credential_manager.delete_credentials(user_id):
-                logging.info(f"✅ 用戶 {user_id} 的憑證已從 Redis 刪除")
-            else:
-                logging.warning(f"⚠️ 刪除用戶 {user_id} 的 Redis 憑證失敗或憑證不存在")
-        
-        session.clear()
-        return jsonify({'success': True})
-        
-    except Exception as e:
-        logging.error(f"登出過程中出錯: {e}")
-        session.clear()  # 即使出錯也清理 session
-        return jsonify({'success': True, 'warning': str(e)})
-
-@auth_bp.route('/api/auth/userinfo', methods=['GET'])
-def api_userinfo():
-    """處理API獲取用戶資訊請求"""
-    try:
-        # 檢查認證狀態
-        if 'credentials' not in session:
-            return jsonify({
-                'success': False, 
-                'error': 'User not authenticated',
-                'user': None
-            }), 401
-            
-        # 從session獲取憑證
-        credentials_dict = session.get('credentials')
-        credentials = google.oauth2.credentials.Credentials(**credentials_dict)
-        
-        # 重新取得用戶資訊
-        user_info = {}
-        
-        # 嘗試從id_token解析
-        if hasattr(credentials, 'id_token') and credentials.id_token:
             try:
-                # 解析ID token
-                id_info = id_token.verify_oauth2_token(
-                    credentials.id_token, 
-                    google.auth.transport.requests.Request(), 
-                    os.environ.get('GOOGLE_CLIENT_ID')
-                )
-                
-                user_info = {
-                    'id': id_info.get('sub'),
-                    'email': id_info.get('email'),
-                    'name': id_info.get('name'),
-                    'picture': id_info.get('picture')
-                }
+                valid_credentials = credential_manager.get_valid_credentials(user_id)
+                if valid_credentials:
+                    refreshed_info = get_user_info_from_credentials(valid_credentials)
             except Exception as e:
-                logging.warning(f"無法從ID token解析用戶資訊: {e}")
+                logging.warning(f"從 Redis 憑證獲取用戶資訊失敗: {e}")
         
-        # 如果id_token不可用或解析失敗，則嘗試使用userinfo API
-        if not user_info.get('id') or user_info.get('id') == 'unknown':
-            try:
-                # 使用credentials訪問Google People API
-                service = googleapiclient.discovery.build('oauth2', 'v2', credentials=credentials)
-                userinfo = service.userinfo().get().execute()
-                
-                user_info = {
-                    'id': userinfo.get('id'),
-                    'email': userinfo.get('email'),
-                    'name': userinfo.get('name'),
-                    'picture': userinfo.get('picture')
-                }
-            except Exception as e:
-                logging.error(f"無法從userinfo API獲取用戶資訊: {e}")
+        # 方法2: 從 session 憑證獲取
+        if not refreshed_info:
+            session_credentials = session.get('credentials')
+            if session_credentials:
+                try:
+                    # 修復：正確重建憑證對象
+                    credential_kwargs = {
+                        'token': session_credentials.get('token'),
+                        'refresh_token': session_credentials.get('refresh_token'),
+                        'token_uri': session_credentials.get('token_uri'),
+                        'client_id': session_credentials.get('client_id'),
+                        'client_secret': session_credentials.get('client_secret'),
+                        'scopes': session_credentials.get('scopes')
+                    }
+                    
+                    # 如果有過期時間，添加到參數中
+                    if session_credentials.get('expiry'):
+                        try:
+                            if isinstance(session_credentials['expiry'], str):
+                                credential_kwargs['expiry'] = datetime.fromisoformat(session_credentials['expiry'])
+                            else:
+                                credential_kwargs['expiry'] = session_credentials['expiry']
+                        except Exception:
+                            pass  # 忽略過期時間解析錯誤
+                    
+                    creds = Credentials(**credential_kwargs)
+                    refreshed_info = get_user_info_from_credentials(creds)
+                except Exception as e:
+                    logging.warning(f"從 session 憑證獲取用戶資訊失敗: {e}")
         
-        # 更新session中的用戶資訊
-        if user_info.get('id') and user_info.get('id') != 'unknown':
-            session['user_info'] = user_info
-            
-            # 更新憑證
-            session['credentials'] = {
-                'token': credentials.token,
-                'refresh_token': credentials.refresh_token,
-                'token_uri': credentials.token_uri,
-                'client_id': credentials.client_id,
-                'client_secret': credentials.client_secret,
-                'scopes': credentials.scopes,
-                'id_token': credentials.id_token if hasattr(credentials, 'id_token') else None
-            }
-            
-            return jsonify({
-                'success': True,
-                'user': user_info
-            })
+        if refreshed_info and refreshed_info.get('name'):
+            # 更新 session 中的用戶資訊
+            session['user_info'] = refreshed_info
+            return jsonify({'success': True, 'user': refreshed_info})
         else:
-            return jsonify({
-                'success': False,
-                'error': '無法獲取完整的用戶資訊',
-                'user': user_info
-            })
+            # 返回現有的用戶資訊
+            return jsonify({'success': True, 'user': user_info})
             
     except Exception as e:
         logging.error(f"獲取用戶資訊時出錯: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'user': None
-        }), 500
+        return jsonify({'success': False, 'error': str(e)})
 
-@auth_bp.route('/api/auth/health')
-def auth_health():
-    """檢查認證系統健康狀態"""
+def get_user_info_from_credentials(credentials):
+    """從憑證獲取用戶資訊的輔助函數"""
     try:
-        # 檢查 Redis 連接
-        redis_status = "connected" if credential_manager.redis_client else "disconnected"
-        if credential_manager.redis_client:
+        # 方法1: 從 id_token 解析
+        if hasattr(credentials, 'id_token') and credentials.id_token:
             try:
-                credential_manager.redis_client.ping()
-                redis_ping = True
-            except:
-                redis_ping = False
-                redis_status = "connection_failed"
-        else:
-            redis_ping = False
+                request_session = google.auth.transport.requests.Request()
+                id_info = id_token.verify_oauth2_token(
+                    credentials.id_token,
+                    request_session,
+                    credentials.client_id
+                )
+                return {
+                    'id': id_info.get('sub'),
+                    'name': id_info.get('name'),
+                    'email': id_info.get('email'),
+                    'picture': id_info.get('picture')
+                }
+            except Exception as e:
+                logging.warning(f"從 id_token 解析用戶資訊失敗: {e}")
         
-        # 檢查當前用戶憑證狀態
-        user_info = session.get('user_info', {})
-        user_id = user_info.get('id')
-        credential_status = "no_user"
+        # 方法2: 使用 userinfo API
+        try:
+            import requests
+            response = requests.get(
+                'https://www.googleapis.com/oauth2/v2/userinfo',
+                headers={'Authorization': f'Bearer {credentials.token}'},
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                userinfo_data = response.json()
+                return {
+                    'id': userinfo_data.get('id'),
+                    'name': userinfo_data.get('name'),
+                    'email': userinfo_data.get('email'),
+                    'picture': userinfo_data.get('picture')
+                }
+        except Exception as e:
+            logging.warning(f"從 userinfo API 獲取用戶資訊失敗: {e}")
         
-        if user_id and user_id != 'unknown':
-            try:
-                stored_credentials = credential_manager.load_credentials(user_id)
-                if stored_credentials:
-                    if stored_credentials.expired:
-                        credential_status = "expired"
-                    else:
-                        credential_status = "valid"
-                else:
-                    credential_status = "not_found"
-            except:
-                credential_status = "error"
-        
-        return jsonify({
-            'redis_status': redis_status,
-            'redis_ping': redis_ping,
-            'credential_status': credential_status,
-            'authenticated': session.get('authenticated', False),
-            'user_id': user_id
-        })
+        return None
         
     except Exception as e:
-        return jsonify({
-            'error': str(e),
-            'redis_status': 'unknown',
-            'redis_ping': False,
-            'credential_status': 'unknown'
-        }), 500
+        logging.error(f"獲取用戶資訊時出錯: {e}")
+        return None

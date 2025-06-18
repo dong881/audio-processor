@@ -93,23 +93,37 @@ class CredentialManager:
             
             cred_data = json.loads(cred_json)
             
-            # 重建憑證對象
-            credentials = Credentials(
-                token=cred_data['token'],
-                refresh_token=cred_data['refresh_token'],
-                token_uri=cred_data['token_uri'],
-                client_id=cred_data['client_id'],
-                client_secret=cred_data['client_secret'],
-                scopes=cred_data['scopes']
-            )
+            # 準備憑證參數
+            credential_kwargs = {
+                'token': cred_data['token'],
+                'refresh_token': cred_data['refresh_token'],
+                'token_uri': cred_data['token_uri'],
+                'client_id': cred_data['client_id'],
+                'client_secret': cred_data['client_secret'],
+                'scopes': cred_data['scopes']
+            }
             
-            # 設置過期時間
+            # 如果有過期時間，添加到參數中
             if cred_data.get('expiry'):
-                credentials.expiry = datetime.fromisoformat(cred_data['expiry'])
+                try:
+                    credential_kwargs['expiry'] = datetime.fromisoformat(cred_data['expiry'])
+                except Exception as e:
+                    logging.warning(f"解析過期時間失敗: {e}")
             
-            # 設置 id_token
+            # 重建憑證對象
+            credentials = Credentials(**credential_kwargs)
+            
+            # 如果有 id_token，嘗試設置（但不強制）
             if cred_data.get('id_token'):
-                credentials.id_token = cred_data['id_token']
+                try:
+                    # 使用 _id_token 私有屬性或者通過其他方式設置
+                    if hasattr(credentials, '_id_token'):
+                        credentials._id_token = cred_data['id_token']
+                    else:
+                        # 如果無法設置，記錄但不報錯
+                        logging.info("無法設置 id_token，但不影響憑證功能")
+                except Exception as e:
+                    logging.warning(f"設置 id_token 失敗，但不影響憑證功能: {e}")
             
             logging.info(f"✅ 成功載入用戶 {user_id} 的憑證")
             return credentials

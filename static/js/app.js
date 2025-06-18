@@ -215,10 +215,9 @@ function setupEventListeners() {
 
 // ===== 認證相關函數 =====
 
-// 檢查用戶認證狀態
+// 檢查用戶認證狀態 - 簡化版本，委託給auth.js處理
 async function checkAuthStatus() {
     try {
-        // 使用正確的 API 路徑
         const response = await fetch(`${API_BASE_URL}/api/auth/status`);
         
         if (!response.ok) {
@@ -228,16 +227,7 @@ async function checkAuthStatus() {
         
         const data = await response.json();
         
-        if (data.authenticated) {
-            // 如果用戶資訊未知但已認證，則嘗試刷新用戶資訊
-            if (data.user && (data.user.id === "unknown" || !data.user.email)) {
-                console.log("已認證但用戶資訊不完整，嘗試刷新用戶資訊...");
-                const refreshed = await refreshUserInfo();
-                if (refreshed) {
-                    return data.user;
-                }
-            }
-            
+        if (data.authenticated && data.user) {
             return data.user;
         } else {
             return null;
@@ -248,30 +238,35 @@ async function checkAuthStatus() {
     }
 }
 
-// 新增函數：刷新用戶資訊
-async function refreshUserInfo() {
-    try {
-        const response = await fetch(`${API_BASE_URL}/api/auth/userinfo`);
-        
-        if (!response.ok) {
-            console.error(`刷新用戶資訊失敗，錯誤碼: ${response.status}`);
-            return false;
-        }
-        
-        const userData = await response.json();
-        
-        if (userData.success && userData.user) {
-            console.log("成功刷新用戶資訊:", userData.user);
-            showAuthenticatedUI(userData.user);
-            return true;
-        } else {
-            console.warn("刷新用戶資訊失敗", userData.error || "未知錯誤");
-            return false;
-        }
-    } catch (error) {
-        console.error('刷新用戶資訊時出錯:', error);
-        return false;
+// 顯示已認證用戶界面 - 接受用戶參數
+function showAuthenticatedUI(user) {
+    if (elements.authSection) elements.authSection.classList.add('d-none');
+    if (elements.processingSection) elements.processingSection.classList.remove('d-none');
+    if (elements.loginButtons.length > 0) {
+        elements.loginButtons.forEach(button => {
+            button.classList.add('d-none');
+        });
     }
+    if (elements.logoutButton) elements.logoutButton.classList.remove('d-none');
+    
+    // 如果有用戶資訊，也更新UI
+    if (user && typeof updateUserInfoUI === 'function') {
+        updateUserInfoUI(user);
+    }
+}
+
+// 顯示未認證用戶界面
+function showUnauthenticatedUI() {
+    console.log('app.js: User not authenticated. UI updated for unauthenticated state.');
+    
+    if (elements.authSection) elements.authSection.classList.remove('d-none');
+    if (elements.processingSection) elements.processingSection.classList.add('d-none');
+    if (elements.loginButtons.length > 0) {
+        elements.loginButtons.forEach(button => {
+            button.classList.remove('d-none');
+        });
+    }
+    if (elements.logoutButton) elements.logoutButton.classList.add('d-none');
 }
 
 // 處理登入
@@ -335,35 +330,6 @@ function removeAllAlerts() {
     document.querySelectorAll('.persistent-alert').forEach(alert => {
         alert.remove();
     });
-}
-
-// 顯示已認證用戶界面
-function showAuthenticatedUI() {
-    if (elements.authSection) elements.authSection.classList.add('d-none');
-    if (elements.processingSection) elements.processingSection.classList.remove('d-none');
-    if (elements.loginButtons.length > 0) {
-        elements.loginButtons.forEach(button => {
-            button.classList.add('d-none');
-        });
-    }
-    if (elements.logoutButton) elements.logoutButton.classList.remove('d-none');
-}
-
-// 顯示未認證用戶界面
-function showUnauthenticatedUI() {
-    // This function will now only update the UI.
-    // Redirection to /login will be handled by auth.js
-    console.log('app.js: User not authenticated. UI updated for unauthenticated state. Redirection handled by auth.js if necessary.');
-    
-    // UI updates for unauthenticated state
-    if (elements.authSection) elements.authSection.classList.remove('d-none');
-    if (elements.processingSection) elements.processingSection.classList.add('d-none');
-    if (elements.loginButtons.length > 0) {
-        elements.loginButtons.forEach(button => {
-            button.classList.remove('d-none');
-        });
-    }
-    if (elements.logoutButton) elements.logoutButton.classList.add('d-none');
 }
 
 // ===== Google Drive 檔案操作 =====

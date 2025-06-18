@@ -5,7 +5,6 @@ async function checkAuthStatus() {
     try {
         const response = await fetch('/api/auth/status');
         
-        // 處理非200響應
         if (!response.ok) {
             console.error(`Auth status check failed with status: ${response.status}`);
             return null;
@@ -17,15 +16,53 @@ async function checkAuthStatus() {
             console.log('用戶未認證，需要登入');
             return null;
         }
-        // 確保返回完整的用戶對象，並增強錯誤處理
+        
+        // 檢查用戶資訊完整性
+        const user = data.user || {};
+        
+        // 如果用戶資訊不完整，嘗試刷新
+        if (!user.name || user.name === '資訊獲取失敗' || user.name === '未知用戶' || user.id === 'unknown') {
+            console.log('用戶資訊不完整，嘗試刷新...');
+            const refreshedUser = await refreshUserInfo();
+            if (refreshedUser) {
+                return refreshedUser;
+            }
+        }
+        
+        // 確保返回完整的用戶對象
         return {
-            id: data.user?.id || 'unknown',
-            name: data.user?.name || '未知使用者',
-            email: data.user?.email || '',
-            picture: data.user?.picture || null
+            id: user.id || 'unknown',
+            name: user.name || '已認證用戶',
+            email: user.email || '',
+            picture: user.picture || null
         };
     } catch (error) {
         console.error('Auth status check failed:', error);
+        return null;
+    }
+}
+
+// 新增：刷新用戶資訊的函數
+async function refreshUserInfo() {
+    try {
+        const response = await fetch('/api/auth/userinfo');
+        
+        if (!response.ok) {
+            console.error(`Refresh user info failed with status: ${response.status}`);
+            return null;
+        }
+        
+        const data = await response.json();
+        
+        if (data.success && data.user && data.user.name) {
+            console.log('用戶資訊刷新成功:', data.user);
+            return data.user;
+        } else {
+            console.warn('用戶資訊刷新失敗:', data.error);
+            return null;
+        }
+    } catch (error) {
+        console.error('Refresh user info failed:', error);
         return null;
     }
 }
@@ -70,7 +107,6 @@ async function createRecordingsFolder() {
 function updateUserInfoUI(user) {
     const userInfoElement = document.getElementById('user-info');
     
-    // 檢查元素是否存在
     if (!userInfoElement) {
         console.warn('user-info元素不存在，無法更新用戶信息UI');
         return;
@@ -83,19 +119,43 @@ function updateUserInfoUI(user) {
     
     console.log("Updating user info with:", JSON.stringify(user));
     
-    // 確保有頭像URL，並添加增強的錯誤處理
-    const avatarUrl = user.picture || '/static/img/avatar-placeholder.png';
+    // 處理用戶資訊不完整的情況
+    let displayName = user.name || '已認證用戶';
+    let displayEmail = user.email || '';
     
-    // Enhanced user info display with better error handling
+    // 如果用戶資訊仍然不完整，顯示提示
+    if (displayName === '資訊獲取失敗' || displayName === '未知用戶' || user.id === 'unknown') {
+        displayName = '已認證用戶 (資訊載入中...)';
+        // 嘗試在背景重新載入用戶資訊
+        setTimeout(async () => {
+            const refreshedUser = await refreshUserInfo();
+            if (refreshedUser && refreshedUser.name) {
+                updateUserInfoUI(refreshedUser);
+            }
+        }, 2000);
+    }
+    
+    // 處理頭像 URL - 添加 CORS 和 referrer policy 支持
+    let avatarUrl = user.picture || '/static/img/avatar-placeholder.png';
+    
+    // 如果是 Google 頭像，嘗試使用代理或添加適當的參數
+    if (avatarUrl && avatarUrl.includes('googleusercontent.com')) {
+        // 移除可能導致 CORS 問題的參數，並添加較小的尺寸
+        avatarUrl = avatarUrl.replace(/=s\d+-c$/, '=s64-c');
+        console.log('處理 Google 頭像 URL:', avatarUrl);
+    }
+    
     userInfoElement.innerHTML = `
         <div class="user-avatar">
-            <img src="${avatarUrl}" alt="${user.name || '使用者'}" 
-                 onerror="this.onerror=null; this.src='/static/img/avatar-placeholder.png'; this.style.opacity='0.7';"
+            <img src="${avatarUrl}" alt="${displayName}" 
+                 crossorigin="anonymous"
+                 referrerpolicy="no-referrer"
+                 onerror="this.onerror=null; this.src='/static/img/avatar-placeholder.png'; this.style.opacity='0.7'; console.log('頭像載入失敗，使用後備圖片');"
                  loading="eager">
         </div>
         <div class="user-details">
-            <span class="user-name">${user.name || '未知使用者'}</span>
-            <span class="user-email">${user.email || ''}</span>
+            <span class="user-name">${displayName}</span>
+            <span class="user-email">${displayEmail}</span>
         </div>
     `;
     
@@ -105,20 +165,25 @@ function updateUserInfoUI(user) {
         userInfoContainer.classList.remove('d-none');
     }
     
-    // 增加額外的圖片載入檢查
+    // 增強的頭像載入錯誤處理
     const avatarImg = userInfoElement.querySelector('.user-avatar img');
     if (avatarImg) {
-        // 檢查圖片是否已經載入
-        if (avatarImg.complete) {
-            if (avatarImg.naturalHeight === 0) {
-                avatarImg.src = '/static/img/avatar-placeholder.png';
-                avatarImg.style.opacity = '0.7';
-            }
+        // 檢查圖片是否已經載入失敗
+        if (avatarImg.complete && avatarImg.naturalHeight === 0) {
+            console.log('頭像圖片載入失敗，使用後備圖片');
+            avatarImg.src = '/static/img/avatar-placeholder.png';
+            avatarImg.style.opacity = '0.7';
         }
         
-        // 加入事件監聽器以確保圖片載入
+        // 添加載入成功事件
+        avatarImg.addEventListener('load', function() {
+            console.log('頭像圖片載入成功');
+            this.style.opacity = '1';
+        });
+        
+        // 添加載入錯誤事件
         avatarImg.addEventListener('error', function() {
-            console.log('Avatar image error, using fallback');
+            console.log('頭像圖片載入錯誤，使用後備圖片:', this.src);
             this.src = '/static/img/avatar-placeholder.png';
             this.style.opacity = '0.7';
         });
@@ -150,9 +215,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
     
-    // 立即檢查認證狀態
+    // 立即檢查認證狀態 - 修復認證狀態判斷
+    console.log('開始檢查認證狀態...');
     const user = await checkAuthStatus();
-    if (user) {
+    
+    if (user && user.id && user.id !== 'unknown') {
+        console.log('用戶已認證:', user);
+        
         // 顯示已認證用戶界面
         if (typeof showAuthenticatedUI === 'function') {
             showAuthenticatedUI(user);
@@ -163,12 +232,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // 如果在登入頁面但已經驗證，則跳轉到主頁
         if (window.location.pathname.includes('/login')) {
+            console.log('已認證用戶在登入頁面，跳轉到主頁');
             window.location.href = '/';
         }
     } else {
+        console.log('用戶未認證或認證資訊不完整');
+        
+        // 只有在非登入頁面才跳轉到登入頁面
         if (!window.location.pathname.includes('/login')) {
-            // 在非登入頁面檢測到未驗證，跳轉到登入頁面
+            console.log('未認證用戶不在登入頁面，跳轉到登入頁面');
             window.location.href = '/login';
+        } else {
+            console.log('用戶在登入頁面，顯示登入界面');
+            // 如果有未認證用戶界面函數，調用它
+            if (typeof showUnauthenticatedUI === 'function') {
+                showUnauthenticatedUI();
+            }
         }
     }
 });
