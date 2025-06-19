@@ -7,6 +7,7 @@ let jobStatusTimer = null;
 let redirectBlocked = false; // 防止循環跳轉的標記
 let lastActiveJobsData = null; // 用於存儲上一次的任務數據
 let activeJobsUpdateTimeout = null; // 用於防抖動
+let currentUser = null; // 添加當前用戶變數
 
 // Add global variables for folder filtering
 let recordingsFilterEnabled = false;
@@ -14,13 +15,13 @@ let pdfFilterEnabled = false;
 const RECORDINGS_FOLDER = 'WearNote_Recordings';
 const DOCUMENTS_FOLDER = 'WearNote_Recordings/Documents';
 
-// Task Manager 相關變數
+// Task Manager 相關變數 - 新增用戶任務管理
 let taskManager = {
     isExpanded: true,
     currentFilter: 'active',
     tasks: {},
     updateTimer: null,
-    updateInterval: 2000,
+    updateInterval: 3000, // 增加到3秒，減少API請求頻率
     estimatedTimes: {
         'pending': 0,
         'downloading': 30,
@@ -30,8 +31,140 @@ let taskManager = {
         'generating': 90,
         'uploading': 45,
         'finalizing': 15
-    }
+    },
+    // 新增任務持久化相關配置
+    storageKey: 'userTasks',
+    maxRetentionDays: 30,
+    lastCleanupDate: null
 };
+
+// 任務持久化管理類
+class TaskPersistenceManager {
+    constructor() {
+        this.storagePrefix = 'audioProcessor_';
+        this.retentionDays = 30;
+    }
+
+    // 獲取用戶特定的儲存鍵
+    getUserTasksKey(userId) {
+        return `${this.storagePrefix}tasks_${userId}`;
+    }
+
+    // 獲取清理日期鍵
+    getCleanupKey(userId) {
+        return `${this.storagePrefix}cleanup_${userId}`;
+    }
+
+    // 儲存任務
+    saveTasks(userId, tasks) {
+        try {
+            const tasksData = {
+                tasks: tasks,
+                lastUpdated: new Date().toISOString()
+            };
+            localStorage.setItem(this.getUserTasksKey(userId), JSON.stringify(tasksData));
+            console.log(`已為用戶 ${userId} 儲存 ${Object.keys(tasks).length} 個任務`);
+        } catch (error) {
+            console.error('儲存任務失敗:', error);
+        }
+    }
+
+    // 載入任務
+    loadTasks(userId) {
+        try {
+            const stored = localStorage.getItem(this.getUserTasksKey(userId));
+            if (!stored) return {};
+
+            const tasksData = JSON.parse(stored);
+            const tasks = tasksData.tasks || {};
+            
+            // 清理過期任務
+            const cleanedTasks = this.cleanExpiredTasks(tasks);
+            
+            // 如果有任務被清理，重新儲存
+            if (Object.keys(cleanedTasks).length !== Object.keys(tasks).length) {
+                this.saveTasks(userId, cleanedTasks);
+            }
+
+            console.log(`已為用戶 ${userId} 載入 ${Object.keys(cleanedTasks).length} 個任務`);
+            return cleanedTasks;
+        } catch (error) {
+            console.error('載入任務失敗:', error);
+            return {};
+        }
+    }
+
+    // 清理過期任務
+    cleanExpiredTasks(tasks) {
+        const now = new Date();
+        const cutoffDate = new Date(now.getTime() - (this.retentionDays * 24 * 60 * 60 * 1000));
+
+        const cleanedTasks = {};
+        let removedCount = 0;
+
+        Object.entries(tasks).forEach(([taskId, task]) => {
+            const taskDate = new Date(task.createdAt);
+            if (taskDate >= cutoffDate) {
+                cleanedTasks[taskId] = task;
+            } else {
+                removedCount++;
+            }
+        });
+
+        if (removedCount > 0) {
+            console.log(`清理了 ${removedCount} 個過期任務`);
+        }
+
+        return cleanedTasks;
+    }
+
+    // 檢查是否需要進行日常清理
+    shouldPerformDailyCleanup(userId) {
+        try {
+            const lastCleanup = localStorage.getItem(this.getCleanupKey(userId));
+            if (!lastCleanup) return true;
+
+            const lastCleanupDate = new Date(lastCleanup);
+            const now = new Date();
+            const daysSinceCleanup = (now - lastCleanupDate) / (1000 * 60 * 60 * 24);
+
+            return daysSinceCleanup >= 1; // 每天執行一次清理
+        } catch (error) {
+            console.error('檢查清理狀態失敗:', error);
+            return true;
+        }
+    }
+
+    // 執行日常清理
+    performDailyCleanup(userId) {
+        try {
+            // 載入並清理任務
+            const tasks = this.loadTasks(userId);
+            this.saveTasks(userId, tasks);
+
+            // 更新清理日期
+            localStorage.setItem(this.getCleanupKey(userId), new Date().toISOString());
+            
+            console.log('日常清理完成');
+        } catch (error) {
+            console.error('執行日常清理失敗:', error);
+        }
+    }
+
+    // 清除特定用戶的所有資料
+    clearUserData(userId) {
+        try {
+            localStorage.removeItem(this.getUserTasksKey(userId));
+            localStorage.removeItem(this.getCleanupKey(userId));
+            console.log(`已清除用戶 ${userId} 的所有任務資料`);
+        } catch (error) {
+            console.error('清除用戶資料失敗:', error);
+        }
+    }
+}
+
+// 初始化任務持久化管理器
+const taskPersistence = new TaskPersistenceManager();
 
 // DOM 元素快取
 const elements = {
@@ -131,7 +264,7 @@ function setupEventListeners() {
         });
     });
 
-    // 錄音資料夾過濾切換開關
+    // 錄音資料夾過濾切換開關 - 修復功能
     const recordingsFilterToggle = document.getElementById('filter-recordings-toggle');
     if (recordingsFilterToggle) {
         // 載入保存的偏好設置或設置為預設開啟
@@ -145,20 +278,13 @@ function setupEventListeners() {
         recordingsFilterToggle.checked = recordingsFilterEnabled;
         
         // 更新視覺效果
-        if (recordingsFilterEnabled) {
-            const toggleTrack = recordingsFilterToggle.nextElementSibling.querySelector('.toggle-track');
-            if (toggleTrack) toggleTrack.classList.add('active');
-        }
+        updateToggleVisualState(recordingsFilterToggle, recordingsFilterEnabled);
         
         recordingsFilterToggle.addEventListener('change', function(e) {
             recordingsFilterEnabled = e.target.checked;
             
-            // 提供視覺反饋
-            const toggleLabel = this.nextElementSibling;
-            if (toggleLabel) {
-                toggleLabel.classList.add('pulse');
-                setTimeout(() => toggleLabel.classList.remove('pulse'), 300);
-            }
+            // 更新視覺狀態
+            updateToggleVisualState(this, recordingsFilterEnabled);
             
             // 保存偏好設置
             localStorage.setItem('filter-recordings-enabled', recordingsFilterEnabled);
@@ -168,7 +294,7 @@ function setupEventListeners() {
         });
     }
     
-    // PDF資料夾過濾切換開關
+    // PDF資料夾過濾切換開關 - 修復功能
     const pdfFilterToggle = document.getElementById('filter-pdf-toggle');
     if (pdfFilterToggle) {
         // 載入保存的偏好設置或設置為預設開啟
@@ -182,20 +308,13 @@ function setupEventListeners() {
         pdfFilterToggle.checked = pdfFilterEnabled;
         
         // 更新視覺效果
-        if (pdfFilterEnabled) {
-            const toggleTrack = pdfFilterToggle.nextElementSibling.querySelector('.toggle-track');
-            if (toggleTrack) toggleTrack.classList.add('active');
-        }
+        updateToggleVisualState(pdfFilterToggle, pdfFilterEnabled);
         
         pdfFilterToggle.addEventListener('change', function(e) {
             pdfFilterEnabled = e.target.checked;
             
-            // 提供視覺反饋
-            const toggleLabel = this.nextElementSibling;
-            if (toggleLabel) {
-                toggleLabel.classList.add('pulse');
-                setTimeout(() => toggleLabel.classList.remove('pulse'), 300);
-            }
+            // 更新視覺狀態
+            updateToggleVisualState(this, pdfFilterEnabled);
             
             // 保存偏好設置
             localStorage.setItem('filter-pdf-enabled', pdfFilterEnabled);
@@ -229,9 +348,23 @@ function setupEventListeners() {
     }
 }
 
+/**
+ * 更新切換開關的視覺狀態
+ */
+function updateToggleVisualState(toggleElement, isEnabled) {
+    const toggleTrack = toggleElement.nextElementSibling.querySelector('.toggle-track');
+    if (toggleTrack) {
+        if (isEnabled) {
+            toggleTrack.classList.add('active');
+        } else {
+            toggleTrack.classList.remove('active');
+        }
+    }
+}
+
 // ===== 認證相關函數 =====
 
-// 檢查用戶認證狀態 - 簡化版本，委託給auth.js處理
+// 檢查用戶認證狀態 - 更新為返回完整用戶資訊
 async function checkAuthStatus() {
     try {
         const response = await fetch(`${API_BASE_URL}/api/auth/status`);
@@ -244,17 +377,20 @@ async function checkAuthStatus() {
         const data = await response.json();
         
         if (data.authenticated && data.user) {
+            currentUser = data.user; // 儲存當前用戶資訊
             return data.user;
         } else {
+            currentUser = null;
             return null;
         }
     } catch (error) {
         console.error('檢查認證狀態時出錯:', error);
+        currentUser = null;
         return null;
     }
 }
 
-// 顯示已認證用戶界面 - 接受用戶參數
+// 顯示已認證用戶界面 - 更新為處理任務恢復
 function showAuthenticatedUI(user) {
     if (elements.authSection) elements.authSection.classList.add('d-none');
     if (elements.processingSection) elements.processingSection.classList.remove('d-none');
@@ -265,13 +401,18 @@ function showAuthenticatedUI(user) {
     }
     if (elements.logoutButton) elements.logoutButton.classList.remove('d-none');
     
-    // 如果有用戶資訊，也更新UI
+    // 更新用戶資訊UI
     if (user && typeof updateUserInfoUI === 'function') {
         updateUserInfoUI(user);
     }
+
+    // 恢復用戶的任務歷史
+    if (user && user.id) {
+        restoreUserTasks(user.id);
+    }
 }
 
-// 顯示未認證用戶界面
+// 顯示未認證用戶界面 - 更新為清理當前用戶資料
 function showUnauthenticatedUI() {
     console.log('app.js: User not authenticated. UI updated for unauthenticated state.');
     
@@ -283,6 +424,12 @@ function showUnauthenticatedUI() {
         });
     }
     if (elements.logoutButton) elements.logoutButton.classList.add('d-none');
+
+    // 清理當前用戶相關資料
+    currentUser = null;
+    taskManager.tasks = {};
+    stopTaskPolling();
+    clearTasksUI();
 }
 
 // 處理登入
@@ -290,9 +437,14 @@ function handleLogin() {
     window.location.href = `${API_BASE_URL}/api/auth/google`;
 }
 
-// 處理登出
+// 處理登出 - 更新為保存任務後登出
 async function handleLogout() {
-    // 使用 auth.js 中的 logoutUser 函数，它包含了防止循環重定向的邏輯
+    // 保存當前任務狀態
+    if (currentUser && currentUser.id) {
+        saveCurrentTasks();
+    }
+
+    // 使用 auth.js 中的 logoutUser 函数
     if (typeof logoutUser === 'function') {
         await logoutUser();
     } else {
@@ -437,7 +589,7 @@ async function loadAudioFiles() {
             queryParams.append('recordingsFolderName', RECORDINGS_FOLDER);
         }
         
-        const response = await fetch(`${API_BASE_URL}/drive/files?${queryParams.toString()}`);
+        const response = await fetch(`${API_BASE_URL}/api/drive/files?${queryParams.toString()}`);
         
         if (!response.ok) {
             if (response.status === 401) {
@@ -542,7 +694,7 @@ async function loadPdfFiles() {
             queryParams.append('pdfFolderName', DOCUMENTS_FOLDER);
         }
         
-        const response = await fetch(`${API_BASE_URL}/drive/files?${queryParams.toString()}`);
+        const response = await fetch(`${API_BASE_URL}/api/drive/files?${queryParams.toString()}`);
         
         if (!response.ok) {
             if (response.status === 401) {
@@ -660,10 +812,10 @@ async function loadPdfFiles() {
     }
 }
 
-// ===== Task Manager 核心功能 =====
+// ===== 任務管理器 核心功能 =====
 
 /**
- * 建立新任務
+ * 建立新任務 - 更新為包含持久化
  */
 async function createNewTask() {
     const selectedFile = document.querySelector('input[name="audioFile"]:checked');
@@ -692,7 +844,7 @@ async function createNewTask() {
             requestBody.attachment_file_ids = attachmentFileIds;
         }
 
-        const response = await fetch(`${API_BASE_URL}/process`, {
+        const response = await fetch(`${API_BASE_URL}/api/process`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestBody)
@@ -717,12 +869,17 @@ async function createNewTask() {
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
                 estimatedCompletion: calculateEstimatedTime('pending'),
-                startTime: Date.now()
+                startTime: Date.now(),
+                // 添加用戶關聯
+                userId: currentUser ? currentUser.id : null
             };
             
             taskManager.tasks[data.job_id] = newTask;
             addTaskToUI(newTask);
             updateTaskCounts();
+            
+            // 立即保存任務
+            saveCurrentTasks();
             
             showSuccess(`任務已建立成功！任務ID: ${data.job_id.substring(0, 8)}...`);
             
@@ -931,249 +1088,349 @@ function getStatusConfig(status) {
 }
 
 /**
- * 取消任務
+ * 更新任務計數
  */
-async function cancelTask(taskId) {
-    if (!confirm('確定要取消這個任務嗎？此操作無法復原。')) {
-        return;
+function updateTaskCounts() {
+    const tasks = Object.values(taskManager.tasks);
+    const activeTasks = tasks.filter(task => 
+        task.status === 'pending' || task.status === 'processing'
+    );
+    
+    const activeCountElement = elements.activeTasksCount;
+    if (activeCountElement) {
+        activeCountElement.textContent = activeTasks.length;
+        activeCountElement.className = activeTasks.length > 0 ? 'badge bg-primary ms-2' : 'badge bg-secondary ms-2';
     }
+    
+    // 自動保存任務
+    if (currentUser && currentUser.id) {
+        saveCurrentTasks();
+    }
+}
+
+/**
+ * 更新空狀態顯示
+ */
+function updateEmptyState() {
+    const tasksContainer = elements.tasksContainer;
+    if (!tasksContainer) return;
+    
+    const taskItems = tasksContainer.querySelectorAll('.task-item');
+    const emptyState = tasksContainer.querySelector('.task-empty-state');
+    
+    if (taskItems.length === 0) {
+        if (emptyState) {
+            emptyState.style.display = 'block';
+        } else {
+            // 創建空狀態元素
+            const emptyDiv = document.createElement('div');
+            emptyDiv.className = 'task-empty-state text-center py-4';
+            emptyDiv.innerHTML = `
+                <i class="bi bi-inbox text-muted" style="font-size: 3rem;"></i>
+                <p class="text-muted mt-2">目前沒有任務</p>
+                <small class="text-muted">選擇音訊檔案後點擊上方按鈕開始處理</small>
+            `;
+            tasksContainer.appendChild(emptyDiv);
+        }
+    } else {
+        if (emptyState) {
+            emptyState.style.display = 'none';
+        }
+    }
+}
+
+/**
+ * 篩選任務顯示
+ */
+function filterTasks() {
+    const filter = taskManager.currentFilter;
+    const taskItems = document.querySelectorAll('.task-item');
+    
+    let visibleCount = 0;
+    
+    taskItems.forEach(item => {
+        const taskStatus = item.getAttribute('data-task-status');
+        let shouldShow = false;
+        
+        switch (filter) {
+            case 'active':
+                shouldShow = taskStatus === 'pending' || taskStatus === 'processing';
+                break;
+            case 'completed':
+                shouldShow = taskStatus === 'completed';
+                break;
+            case 'failed':
+                shouldShow = taskStatus === 'failed' || taskStatus === 'cancelled';
+                break;
+            case 'all':
+                shouldShow = true;
+                break;
+        }
+        
+        if (shouldShow) {
+            item.style.display = 'block';
+            visibleCount++;
+        } else {
+            item.style.display = 'none';
+        }
+    });
+    
+    // 如果沒有可見的任務，顯示相應的空狀態訊息
+    const emptyState = elements.tasksContainer.querySelector('.task-empty-state');
+    if (visibleCount === 0) {
+        if (emptyState) {
+            let message = '';
+            switch (filter) {
+                case 'active':
+                    message = '目前沒有進行中的任務';
+                    break;
+                case 'completed':
+                    message = '目前沒有已完成的任務';
+                    break;
+                case 'failed':
+                    message = '目前沒有失敗的任務';
+                    break;
+                default:
+                    message = '目前沒有任務';
+            }
+            emptyState.innerHTML = `
+                <i class="bi bi-inbox text-muted" style="font-size: 3rem;"></i>
+                <p class="text-muted mt-2">${message}</p>
+                ${filter === 'active' ? '<small class="text-muted">選擇音訊檔案後點擊上方按鈕開始處理</small>' : ''}
+            `;
+            emptyState.style.display = 'block';
+        }
+    } else {
+        if (emptyState) {
+            emptyState.style.display = 'none';
+        }
+    }
+}
+
+/**
+ * 切換任務管理器展開狀態
+ */
+function toggleTaskManager() {
+    taskManager.isExpanded = !taskManager.isExpanded;
+    
+    const content = elements.taskManagerContent;
+    const toggleIcon = document.getElementById('toggle-task-icon');
+    
+    if (taskManager.isExpanded) {
+        content.style.display = 'block';
+        if (toggleIcon) toggleIcon.className = 'bi bi-chevron-down';
+    } else {
+        content.style.display = 'none';
+        if (toggleIcon) toggleIcon.className = 'bi bi-chevron-up';
+    }
+}
+
+/**
+ * 刷新任務狀態
+ */
+function refreshTasks() {
+    const refreshIcon = document.getElementById('refresh-tasks-icon');
+    if (refreshIcon) {
+        refreshIcon.classList.add('rotating');
+        setTimeout(() => {
+            refreshIcon.classList.remove('rotating');
+        }, 1000);
+    }
+    
+    // 立即更新任務狀態
+    updateTasksStatus();
+}
+
+// 設定檔案上傳的 MIME 類型
+const SUPPORTED_MIME_TYPES = [
+    'audio/mpeg', 'audio/mp4', 'audio/x-m4a', 'audio/mp3', 'audio/wav', 'audio/webm',
+    'audio/ogg', 'audio/aac', 'audio/flac', 'audio/x-flac',
+    'application/pdf', 'application/vnd.google-apps.document', 'application/vnd.google-apps.presentation'
+];
+
+// 檢查檔案類型是否支援
+function isFileTypeSupported(mimeType) {
+    return SUPPORTED_MIME_TYPES.includes(mimeType);
+}
+
+// 初始化頁面
+function initApp() {
+    console.log('應用程式初始化開始');
+    
+    // 檢查用戶認證狀態
+    checkAuthStatus()
+        .then(user => {
+            if (user) {
+                console.log('用戶已認證:', user.email);
+                showAuthenticatedUI(user);
+                // 載入檔案（在認證UI顯示後載入）
+                loadDriveFiles();
+            } else {
+                console.log('用戶未認證');
+                showUnauthenticatedUI();
+            }
+        })
+        .catch(error => {
+            console.error('認證檢查失敗:', error);
+            showUnauthenticatedUI();
+        });
+    
+    // 初始化任務管理器
+    initTaskManager();
+    
+    console.log('應用程式初始化完成');
+}
+
+// 初始化任務管理器 - 更新為支援任務恢復
+function initTaskManager() {
+    // 如果用戶已認證，會在 showAuthenticatedUI 中恢復任務
+    // 這裡不需要做任何事情
+    console.log('任務管理器初始化完成');
+}
+
+// 頁面卸載時保存任務並停止輪詢
+window.addEventListener('beforeunload', () => {
+    console.log('頁面即將卸載，保存任務狀態');
+    saveCurrentTasks();
+    stopTaskPolling();
+});
+
+// 頁面隱藏時保存任務
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        console.log('頁面隱藏，保存任務狀態');
+        saveCurrentTasks();
+    } else {
+        console.log('頁面重新顯示，檢查任務狀態');
+        // 如果有活躍任務，重新開始輪詢
+        const activeTasks = Object.values(taskManager.tasks).filter(
+            task => task.status === 'pending' || task.status === 'processing'
+        );
+        if (activeTasks.length > 0 && !taskManager.updateTimer) {
+            startTaskPolling();
+        }
+    }
+});
+
+// 定期自動保存（每30秒）
+setInterval(() => {
+    if (currentUser && Object.keys(taskManager.tasks).length > 0) {
+        saveCurrentTasks();
+    }
+}, 30000);
+
+// ===== 任務持久化相關函數 =====
+
+/**
+ * 恢復用戶任務
+ */
+function restoreUserTasks(userId) {
+    try {
+        console.log(`正在恢復用戶 ${userId} 的任務...`);
+        
+        // 執行日常清理檢查
+        if (taskPersistence.shouldPerformDailyCleanup(userId)) {
+            taskPersistence.performDailyCleanup(userId);
+        }
+        
+        // 載入用戶任務
+        const savedTasks = taskPersistence.loadTasks(userId);
+        taskManager.tasks = savedTasks;
+        
+        // 更新UI
+        refreshTasksUI();
+        updateTaskCounts();
+        
+        // 如果有活躍任務，開始輪詢
+        const activeTasks = Object.values(taskManager.tasks).filter(
+            task => task.status === 'pending' || task.status === 'processing'
+        );
+        
+        if (activeTasks.length > 0) {
+            console.log(`發現 ${activeTasks.length} 個活躍任務，開始輪詢狀態`);
+            startTaskPolling();
+        }
+        
+        console.log(`成功恢復 ${Object.keys(savedTasks).length} 個任務`);
+    } catch (error) {
+        console.error('恢復用戶任務失敗:', error);
+        taskManager.tasks = {}; // 重置為空
+    }
+}
+
+/**
+ * 保存當前任務
+ */
+function saveCurrentTasks() {
+    if (!currentUser || !currentUser.id) return;
     
     try {
-        const response = await fetch(`${API_BASE_URL}/job/${taskId}/cancel`, {
-            method: 'POST'
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            if (data.success) {
-                // 更新本地任務狀態
-                if (taskManager.tasks[taskId]) {
-                    taskManager.tasks[taskId].status = 'cancelled';
-                    taskManager.tasks[taskId].message = '任務已被使用者取消';
-                    taskManager.tasks[taskId].updatedAt = new Date().toISOString();
-                    updateTaskInUI(taskManager.tasks[taskId]);
-                    updateTaskCounts();
-                }
-                showSuccess('任務已取消');
-            } else {
-                throw new Error(data.error || '取消任務失敗');
-            }
-        } else {
-            throw new Error(`HTTP ${response.status}: 取消請求失敗`);
-        }
+        taskPersistence.saveTasks(currentUser.id, taskManager.tasks);
     } catch (error) {
-        console.error('取消任務失敗:', error);
-        showError(`取消任務失敗: ${error.message}`);
+        console.error('保存任務失敗:', error);
     }
 }
 
 /**
- * 查看任務結果
+ * 清理任務UI
  */
-function viewResult(taskId) {
-    const task = taskManager.tasks[taskId];
-    if (!task || !task.result) {
-        showError('無法找到任務結果');
-        return;
+function clearTasksUI() {
+    if (elements.tasksContainer) {
+        elements.tasksContainer.innerHTML = '';
+        updateEmptyState();
     }
-    
-    // 顯示結果 - 重用現有的結果顯示邏輯
-    displayTaskResult(task.result);
+    updateTaskCounts();
 }
 
 /**
- * 顯示任務結果
+ * 刷新任務UI
  */
-function displayTaskResult(result) {
-    // 顯示結果區域
-    elements.resultContainer.classList.remove('d-none');
+function refreshTasksUI() {
+    if (!elements.tasksContainer) return;
     
-    // 填充結果資訊
-    if (elements.resultTitle) {
-        elements.resultTitle.innerHTML = `<i class="bi bi-file-text me-2"></i>${result.title || '未知標題'}`;
-    }
+    // 清空現有任務
+    elements.tasksContainer.innerHTML = '';
     
-    if (elements.resultSummary) {
-        elements.resultSummary.textContent = result.summary || '未生成摘要';
-    }
-    
-    if (elements.resultTodos) {
-        elements.resultTodos.innerHTML = '';
-        if (result.todos && result.todos.length > 0) {
-            result.todos.forEach(todo => {
-                const li = document.createElement('li');
-                li.innerHTML = `<i class="bi bi-check-square me-1"></i> ${todo}`;
-                elements.resultTodos.appendChild(li);
-            });
-        } else {
-            elements.resultTodos.innerHTML = '<li><i class="bi bi-info-circle me-1"></i> 未找到待辦事項</li>';
-        }
-    }
-    
-    if (elements.resultLink) {
-        if (result.notion_page_url) {
-            elements.resultLink.href = result.notion_page_url;
-            elements.resultLink.classList.remove('d-none');
-        } else {
-            elements.resultLink.classList.add('d-none');
-        }
-    }
-    
-    if (elements.resultSpeakers) {
-        elements.resultSpeakers.innerHTML = '';
-        if (result.identified_speakers) {
-            const speakers = Object.entries(result.identified_speakers);
-            if (speakers.length > 0) {
-                elements.resultSpeakers.innerHTML = '<h6 class="fw-bold"><i class="bi bi-people-fill me-2"></i> 識別的說話人:</h6><ul>';
-                speakers.forEach(([id, name]) => {
-                    elements.resultSpeakers.innerHTML += `<li><i class="bi bi-person me-1"></i> ${name} (${id})</li>`;
-                });
-                elements.resultSpeakers.innerHTML += '</ul>';
-            }
-        }
-    }
-    
-    // 滾動到結果區域
-    elements.resultContainer.scrollIntoView({ behavior: 'smooth' });
-}
-
-/**
- * 更新任務在UI中的顯示 - 優化以減少閃爍
- */
-function updateTaskInUI(task) {
-    const taskElement = document.querySelector(`[data-task-id="${task.id}"]`);
-    if (!taskElement) {
-        // 如果元素不存在，創建新的
+    // 重新添加所有任務
+    Object.values(taskManager.tasks).forEach(task => {
         addTaskToUI(task);
-        return;
-    }
+    });
     
-    // 更新狀態屬性
-    taskElement.setAttribute('data-task-status', task.status);
-    
-    // 獲取狀態配置
-    const statusConfig = getStatusConfig(task.status);
-    const progressWidth = Math.max(task.progress, 2);
-    
-    // 只更新需要變更的元素，而不是重新創建整個任務元素
-    
-    // 更新狀態圖標
-    const statusIcon = taskElement.querySelector('.task-title i');
-    if (statusIcon) {
-        statusIcon.className = `${statusConfig.icon} me-2`;
-    }
-    
-    // 更新卡片邊框樣式
-    const card = taskElement.querySelector('.task-card');
-    if (card) {
-        card.className = `card task-card ${statusConfig.cardClass}`;
-    }
-    
-    // 更新狀態文字
-    const statusText = taskElement.querySelector('.task-status-text');
-    if (statusText) {
-        statusText.textContent = statusConfig.label;
-        statusText.className = `task-status-text ${statusConfig.textClass}`;
-    }
-    
-    // 更新進度百分比
-    const progressText = taskElement.querySelector('.task-progress-text');
-    if (progressText) {
-        progressText.textContent = `${task.progress}%`;
-    }
-    
-    // 更新進度條
-    const progressBar = taskElement.querySelector('.progress-bar');
-    if (progressBar) {
-        progressBar.style.width = `${progressWidth}%`;
-        progressBar.setAttribute('aria-valuenow', task.progress);
-        progressBar.className = `progress-bar ${statusConfig.progressClass}`;
-    }
-    
-    // 更新訊息
-    const messageElement = taskElement.querySelector('.task-message small');
-    if (messageElement) {
-        messageElement.innerHTML = `<i class="bi bi-info-circle me-1"></i>${task.message || '處理中...'}`;
-    }
-    
-    // 更新預估時間（僅在處理中時顯示）
-    let etaElement = taskElement.querySelector('.task-eta');
-    if (task.status === 'processing' && task.estimatedCompletion > 0) {
-        if (!etaElement) {
-            // 創建預估時間元素
-            const etaDiv = document.createElement('div');
-            etaDiv.className = 'task-eta mt-1';
-            etaDiv.innerHTML = `
-                <small class="text-muted">
-                    <i class="bi bi-clock me-1"></i>
-                    預估剩餘時間: <span class="eta-text">${formatRemainingTime(task.estimatedCompletion)}</span>
-                </small>
-            `;
-            const messageElement = taskElement.querySelector('.task-message');
-            if (messageElement) {
-                messageElement.after(etaDiv);
-            }
-        } else {
-            // 更新現有的預估時間
-            const etaText = etaElement.querySelector('.eta-text');
-            if (etaText) {
-                etaText.textContent = formatRemainingTime(task.estimatedCompletion);
-            }
-        }
-    } else if (etaElement) {
-        // 移除預估時間元素
-        etaElement.remove();
-    }
-    
-    // 更新時間戳
-    const timestampsElement = taskElement.querySelector('.task-timestamps small');
-    if (timestampsElement) {
-        timestampsElement.innerHTML = `
-            建立時間: ${new Date(task.createdAt).toLocaleString()}
-            ${task.updatedAt !== task.createdAt ? 
-                `| 更新時間: ${new Date(task.updatedAt).toLocaleString()}` : ''
-            }
-        `;
-    }
-    
-    // 更新操作按鈕
-    const actionsElement = taskElement.querySelector('.task-actions');
-    if (actionsElement) {
-        let actionsHTML = '';
-        if (task.status === 'processing' || task.status === 'pending') {
-            actionsHTML = `
-                <button class="btn btn-sm btn-outline-danger" onclick="cancelTask('${task.id}')" title="取消任務">
-                    <i class="bi bi-x-lg"></i>
-                </button>
-            `;
-        } else if (task.status === 'completed') {
-            actionsHTML = `
-                <button class="btn btn-sm btn-success" onclick="viewResult('${task.id}')" title="查看結果">
-                    <i class="bi bi-eye"></i>
-                </button>
-            `;
-        }
-        actionsElement.innerHTML = actionsHTML;
-    }
+    // 應用當前篩選
+    filterTasks();
+    updateEmptyState();
 }
 
+// ===== 任務輪詢相關函數 =====
+
 /**
- * 開始任務輪詢
+ * 開始任務狀態輪詢
  */
 function startTaskPolling() {
-    if (taskManager.updateTimer) return; // 已經在輪詢中
+    // 如果已經在輪詢，先停止
+    if (taskManager.updateTimer) {
+        stopTaskPolling();
+    }
     
-    taskManager.updateTimer = setInterval(updateTasksStatus, taskManager.updateInterval);
-    updateTasksStatus(); // 立即執行一次
+    console.log('開始任務狀態輪詢...');
+    
+    // 立即執行一次更新
+    updateTasksStatus();
+    
+    // 設置定時輪詢
+    taskManager.updateTimer = setInterval(() => {
+        updateTasksStatus();
+    }, taskManager.updateInterval);
 }
 
 /**
- * 停止任務輪詢
+ * 停止任務狀態輪詢
  */
 function stopTaskPolling() {
     if (taskManager.updateTimer) {
         clearInterval(taskManager.updateTimer);
         taskManager.updateTimer = null;
+        console.log('任務狀態輪詢已停止');
     }
 }
 
@@ -1190,241 +1447,170 @@ async function updateTasksStatus() {
         return;
     }
     
-    // 同時更新所有活躍任務
-    const updatePromises = activeTasks.map(task => updateSingleTaskStatus(task.id));
-    await Promise.allSettled(updatePromises);
-    
-    updateTaskCounts();
-}
-
-/**
- * 更新單個任務狀態
- */
-async function updateSingleTaskStatus(taskId) {
     try {
-        const response = await fetch(`${API_BASE_URL}/job/${taskId}`);
+        // 批量檢查所有活躍任務的狀態
+        const taskIds = activeTasks.map(task => task.id);
+        const response = await fetch(`${API_BASE_URL}/api/jobs/status/batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_ids: taskIds })
+        });
         
         if (!response.ok) {
+            // 如果批量端點失敗，使用單個任務查詢作為後備方案
             if (response.status === 404) {
-                // 任務不存在，可能已過期
-                if (taskManager.tasks[taskId]) {
-                    taskManager.tasks[taskId].status = 'failed';
-                    taskManager.tasks[taskId].message = '任務已過期或不存在';
-                    updateTaskInUI(taskManager.tasks[taskId]);
-                }
+                console.log('批量狀態端點不可用，使用單個查詢後備方案');
+                await updateTasksStatusFallback(activeTasks);
                 return;
             }
-            throw new Error(`HTTP ${response.status}`);
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
         
         const data = await response.json();
         
-        if (data.success && data.job) {
-            const serverTask = data.job;
-            const localTask = taskManager.tasks[taskId];
+        if (data.success && data.jobs) {
+            let hasUpdates = false;
             
-            if (!localTask) return;
-            
-            // 更新本地任務資料
-            localTask.status = serverTask.status;
-            localTask.progress = serverTask.progress;
-            localTask.message = serverTask.message || localTask.message;
-            localTask.updatedAt = serverTask.updated_at;
-            
-            // 計算預估剩餘時間
-            if (serverTask.status === 'processing') {
-                const elapsedTime = (Date.now() - localTask.startTime) / 1000;
-                const progressRatio = serverTask.progress / 100;
-                
-                if (progressRatio > 0) {
-                    const estimatedTotal = elapsedTime / progressRatio;
-                    localTask.estimatedCompletion = Math.max(0, estimatedTotal - elapsedTime);
+            Object.entries(data.jobs).forEach(([jobId, jobData]) => {
+                if (taskManager.tasks[jobId]) {
+                    const oldStatus = taskManager.tasks[jobId].status;
+                    const oldProgress = taskManager.tasks[jobId].progress;
+                    
+                    // 更新任務資料
+                    updateTaskData(taskManager.tasks[jobId], jobData);
+                    
+                    // 檢查是否有變化
+                    if (oldStatus !== taskManager.tasks[jobId].status || 
+                        oldProgress !== taskManager.tasks[jobId].progress) {
+                        hasUpdates = true;
+                        
+                        // 更新UI
+                        updateTaskElementUI(jobId, taskManager.tasks[jobId]);
+                        
+                        // 如果任務完成，顯示通知
+                        if (taskManager.tasks[jobId].status === 'completed' && oldStatus !== 'completed') {
+                            showSuccess(`任務完成：${taskManager.tasks[jobId].fileName}`);
+                        } else if (taskManager.tasks[jobId].status === 'failed' && oldStatus !== 'failed') {
+                            showError(`任務失敗：${taskManager.tasks[jobId].fileName}`);
+                        }
+                    }
                 }
-            }
-            
-            // 如果任務完成，保存結果
-            if (serverTask.status === 'completed' && serverTask.result) {
-                localTask.result = serverTask.result;
-            }
-            
-            // 如果任務失敗，保存錯誤信息
-            if (serverTask.status === 'failed' && serverTask.error) {
-                localTask.error = serverTask.error;
-                localTask.message = `錯誤: ${serverTask.error}`;
-            }
-            
-            updateTaskInUI(localTask);
-        }
-    } catch (error) {
-        console.error(`更新任務 ${taskId} 狀態失敗:`, error);
-    }
-}
-
-/**
- * 重新整理任務
- */
-function refreshTasks() {
-    const refreshIcon = document.getElementById('refresh-tasks-icon');
-    if (refreshIcon) {
-        refreshIcon.classList.add('rotating');
-        setTimeout(() => refreshIcon.classList.remove('rotating'), 1000);
-    }
-    
-    updateTasksStatus();
-}
-
-/**
- * 切換任務管理器展開/收合
- */
-function toggleTaskManager() {
-    const content = elements.taskManagerContent;
-    const toggleIcon = document.getElementById('toggle-task-icon');
-    
-    taskManager.isExpanded = !taskManager.isExpanded;
-    
-    if (taskManager.isExpanded) {
-        content.style.display = 'block';
-        toggleIcon.className = 'bi bi-chevron-down';
-    } else {
-        content.style.display = 'none';
-        toggleIcon.className = 'bi bi-chevron-right';
-    }
-}
-
-/**
- * 篩選任務
- */
-function filterTasks() {
-    const filter = taskManager.currentFilter;
-    const taskElements = document.querySelectorAll('.task-item');
-    
-    taskElements.forEach(element => {
-        const status = element.getAttribute('data-task-status');
-        let shouldShow = false;
-        
-        switch (filter) {
-            case 'active':
-                shouldShow = status === 'pending' || status === 'processing';
-                break;
-            case 'completed':
-                shouldShow = status === 'completed';
-                break;
-            case 'failed':
-                shouldShow = status === 'failed' || status === 'cancelled';
-                break;
-            case 'all':
-                shouldShow = true;
-                break;
-        }
-        
-        element.style.display = shouldShow ? 'block' : 'none';
-    });
-    
-    // 檢查是否需要顯示空狀態
-    updateEmptyState();
-}
-
-/**
- * 更新空狀態顯示
- */
-function updateEmptyState() {
-    const visibleTasks = document.querySelectorAll('.task-item[style*="block"], .task-item:not([style*="none"])');
-    const emptyState = elements.tasksContainer.querySelector('.task-empty-state');
-    
-    if (visibleTasks.length === 0) {
-        if (emptyState) emptyState.style.display = 'block';
-    } else {
-        if (emptyState) emptyState.style.display = 'none';
-    }
-}
-
-/**
- * 更新任務計數
- */
-function updateTaskCounts() {
-    const activeCount = Object.values(taskManager.tasks).filter(
-        task => task.status === 'pending' || task.status === 'processing'
-    ).length;
-    
-    elements.activeTasksCount.textContent = activeCount;
-    elements.activeTasksCount.className = activeCount > 0 ? 'badge bg-primary ms-2' : 'badge bg-secondary ms-2';
-}
-
-// 修改初始化函數
-function initApp() {
-    // 檢查用戶認證狀態
-    checkAuthStatus()
-        .then(isAuthenticated => {
-            if (isAuthenticated) {
-                showAuthenticatedUI();
-                // 只有在已認證的情況下才載入檔案
-                loadDriveFiles();
-            } else {
-                // 未認證用戶將顯示未認證的UI
-                showUnauthenticatedUI();
-            }
-        })
-        .catch(error => {
-            console.error('認證檢查失敗:', error);
-            showUnauthenticatedUI();
-        });
-    
-    // 初始化任務管理器
-    initTaskManager();
-}
-
-/**
- * 初始化任務管理器
- */
-function initTaskManager() {
-    // 開始輪詢活躍任務（如果有的話）
-    checkAndStartPolling();
-}
-
-/**
- * 檢查並開始輪詢
- */
-async function checkAndStartPolling() {
-    try {
-        const response = await fetch(`${API_BASE_URL}/jobs?filter=active`);
-        
-        if (response.ok) {
-            const data = await response.json();
-            const activeTasks = data.active_jobs || {};
-            
-            // 將伺服器任務轉換為本地任務格式
-            Object.entries(activeTasks).forEach(([taskId, serverTask]) => {
-                taskManager.tasks[taskId] = {
-                    id: taskId,
-                    fileName: '未知檔案', // 伺服器沒有提供檔案名稱
-                    attachmentCount: 0,
-                    status: serverTask.status,
-                    progress: serverTask.progress,
-                    message: serverTask.message || '處理中...',
-                    createdAt: serverTask.created_at,
-                    updatedAt: serverTask.updated_at,
-                    estimatedCompletion: 0,
-                    startTime: new Date(serverTask.created_at).getTime()
-                };
-                
-                addTaskToUI(taskManager.tasks[taskId]);
             });
             
-            updateTaskCounts();
-            
-            if (Object.keys(activeTasks).length > 0) {
-                startTaskPolling();
+            if (hasUpdates) {
+                updateTaskCounts();
+                filterTasks();
             }
         }
     } catch (error) {
-        console.error('檢查活躍任務失敗:', error);
+        console.error('更新任務狀態失敗:', error);
+        
+        // 如果是認證錯誤，停止輪詢
+        if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+            stopTaskPolling();
+            showUnauthenticatedUI();
+        } else {
+            // 對於其他錯誤，嘗試使用後備方案
+            console.log('嘗試使用單個任務查詢後備方案');
+            await updateTasksStatusFallback(activeTasks);
+        }
     }
 }
 
-// 頁面卸載時停止輪詢
-window.addEventListener('beforeunload', () => {
-    stopTaskPolling();
-});
+/**
+ * 後備方案：逐一查詢任務狀態
+ */
+async function updateTasksStatusFallback(activeTasks) {
+    try {
+        let hasUpdates = false;
+        
+        // 限制並發請求數量，避免過載
+        const batchSize = 3;
+        for (let i = 0; i < activeTasks.length; i += batchSize) {
+            const batch = activeTasks.slice(i, i + batchSize);
+            
+            const promises = batch.map(async (task) => {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/api/job/${task.id}`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    
+                    const data = await response.json();
+                    if (data.success && data.job) {
+                        const oldStatus = task.status;
+                        const oldProgress = task.progress;
+                        
+                        // 更新任務資料
+                        updateTaskData(task, data.job);
+                        
+                        // 檢查是否有變化
+                        if (oldStatus !== task.status || oldProgress !== task.progress) {
+                            hasUpdates = true;
+                            
+                            // 更新UI
+                            updateTaskElementUI(task.id, task);
+                            
+                            // 如果任務完成，顯示通知
+                            if (task.status === 'completed' && oldStatus !== 'completed') {
+                                showSuccess(`任務完成：${task.fileName}`);
+                            } else if (task.status === 'failed' && oldStatus !== 'failed') {
+                                showError(`任務失敗：${task.fileName}`);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error(`獲取任務 ${task.id} 狀態失敗:`, error);
+                }
+            });
+            
+            await Promise.all(promises);
+            
+            // 在批次之間稍微延遲，避免過載
+            if (i + batchSize < activeTasks.length) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+        }
+        
+        if (hasUpdates) {
+            updateTaskCounts();
+            filterTasks();
+        }
+    } catch (error) {
+        console.error('後備方案更新任務狀態失敗:', error);
+    }
+}
+
+/**
+ * 查看任務結果
+ */
+async function viewResult(taskId) {
+    const task = taskManager.tasks[taskId];
+    if (!task) {
+        showError('找不到任務資料');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/jobs/${taskId}/result`);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: 獲取結果失敗`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success && data.result) {
+            displayTaskResult(task, data.result);
+        } else {
+            throw new Error(data.error || '獲取結果失敗');
+        }
+    } catch (error) {
+        console.error('獲取任務結果失敗:', error);
+        showError(`獲取結果失敗: ${error.message}`);
+    }
+}
+
 // ===== 輔助函數 =====
 
 // 檢查是否為音訊檔案
@@ -1444,4 +1630,161 @@ function formatFileSize(bytes) {
     const i = Math.floor(Math.log(bytes) / Math.log(1024));
     
     return (bytes / Math.pow(1024, i)).toFixed(2) + ' ' + sizes[i];
+}
+
+/**
+ * 更新任務資料
+ */
+function updateTaskData(task, jobData) {
+    task.status = jobData.status || task.status;
+    task.progress = Math.round(jobData.progress || 0);
+    task.message = jobData.message || task.message;
+    task.updatedAt = new Date().toISOString();
+    
+    // 更新預估完成時間
+    if (task.status === 'processing' && task.startTime) {
+        const elapsed = (Date.now() - task.startTime) / 1000;
+        const progressRate = task.progress / elapsed;
+        const remainingProgress = 100 - task.progress;
+        task.estimatedCompletion = remainingProgress / progressRate;
+    } else {
+        task.estimatedCompletion = calculateEstimatedTime(task.status);
+    }
+    
+    // 如果任務完成或失敗，保存結果資料
+    if (jobData.result) {
+        task.result = jobData.result;
+    }
+}
+
+/**
+ * 更新任務元素UI
+ */
+function updateTaskElementUI(taskId, task) {
+    const taskElement = document.querySelector(`[data-task-id="${taskId}"]`);
+    if (!taskElement) return;
+    
+    const statusConfig = getStatusConfig(task.status);
+    const progressWidth = Math.max(task.progress, 2);
+    
+    // 更新狀態屬性
+    taskElement.setAttribute('data-task-status', task.status);
+    
+    // 更新卡片樣式
+    const card = taskElement.querySelector('.task-card');
+    if (card) {
+        card.className = `card task-card ${statusConfig.cardClass}`;
+    }
+    
+    // 更新狀態圖標和文字
+    const statusIcon = taskElement.querySelector('.task-title i');
+    const statusText = taskElement.querySelector('.task-status-text');
+    if (statusIcon) statusIcon.className = `${statusConfig.icon} me-2`;
+    if (statusText) {
+        statusText.textContent = statusConfig.label;
+        statusText.className = `task-status-text ${statusConfig.textClass}`;
+    }
+    
+    // 更新進度條
+    const progressBar = taskElement.querySelector('.progress-bar');
+    const progressText = taskElement.querySelector('.task-progress-text');
+    if (progressBar) {
+        progressBar.style.width = `${progressWidth}%`;
+        progressBar.setAttribute('aria-valuenow', task.progress);
+        progressBar.className = `progress-bar ${statusConfig.progressClass}`;
+    }
+    if (progressText) {
+        progressText.textContent = `${task.progress}%`;
+    }
+    
+    // 更新訊息
+    const messageElement = taskElement.querySelector('.task-message small');
+    if (messageElement) {
+        messageElement.innerHTML = `<i class="bi bi-info-circle me-1"></i>${task.message || '處理中...'}`;
+    }
+    
+    // 更新預估時間
+    const etaElement = taskElement.querySelector('.eta-text');
+    if (etaElement && task.status === 'processing' && task.estimatedCompletion > 0) {
+        etaElement.textContent = formatRemainingTime(task.estimatedCompletion);
+    }
+    
+    // 更新時間戳記
+    const timestampElement = taskElement.querySelector('.task-timestamps small');
+    if (timestampElement) {
+        timestampElement.innerHTML = `
+            建立時間: ${new Date(task.createdAt).toLocaleString()}
+            ${task.updatedAt !== task.createdAt ? 
+                `| 更新時間: ${new Date(task.updatedAt).toLocaleString()}` : ''
+            }
+        `;
+    }
+    
+    // 更新操作按鈕
+    const actionsContainer = taskElement.querySelector('.task-actions');
+    if (actionsContainer) {
+        let buttonsHtml = '';
+        
+        if (task.status === 'processing' || task.status === 'pending') {
+            buttonsHtml += `
+                <button class="btn btn-sm btn-outline-danger" onclick="cancelTask('${task.id}')" title="取消任務">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            `;
+        }
+        
+        if (task.status === 'completed') {
+            buttonsHtml += `
+                <button class="btn btn-sm btn-success" onclick="viewResult('${task.id}')" title="查看結果">
+                    <i class="bi bi-eye"></i>
+                </button>
+            `;
+        }
+        
+        actionsContainer.innerHTML = buttonsHtml;
+    }
+}
+
+// ===== 任務操作函數 =====
+
+/**
+ * 取消任務
+ */
+async function cancelTask(taskId) {
+    if (!confirm('確定要取消這個任務嗎？')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/job/${taskId}/cancel`, {
+            method: 'POST'
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: 取消任務失敗`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            // 更新本地任務狀態
+            if (taskManager.tasks[taskId]) {
+                taskManager.tasks[taskId].status = 'cancelled';
+                taskManager.tasks[taskId].message = '任務已取消';
+                taskManager.tasks[taskId].updatedAt = new Date().toISOString();
+                
+                updateTaskElementUI(taskId, taskManager.tasks[taskId]);
+                updateTaskCounts();
+                filterTasks();
+                saveCurrentTasks();
+            }
+            
+            showSuccess('任務已成功取消');
+        } else {
+            throw new Error(data.error || '取消任務失敗');
+        }
+    } catch (error) {
+        console.error('取消任務失敗:', error);
+        showError(`取消任務失敗: ${error.message}`);
+    }
 }

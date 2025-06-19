@@ -449,6 +449,10 @@ p {
   vertical-align: middle;
 }
 
+.toggle-track.active {
+  background: #28a745;
+}
+
 /* 優化 toggle-thumb 樣式 */
 .toggle-thumb {
   position: absolute;
@@ -463,7 +467,8 @@ p {
 }
 
 /* 錄音檔過濾開關選中狀態 */
-.toggle-input:checked + .toggle-label .toggle-track {
+.toggle-input:checked + .toggle-label .toggle-track,
+#filter-recordings-toggle:checked + .toggle-label .toggle-track {
   background: #28a745;
   animation: pulse 0.3s ease-out;
 }
@@ -471,6 +476,11 @@ p {
 /* PDF過濾開關選中狀態 */
 #filter-pdf-toggle:checked + .toggle-label .toggle-track {
   background: #17a2b8; /* Changed to a more distinct teal color */
+}
+
+/* PDF過濾開關的軌道激活狀態 */
+#filter-pdf-toggle:checked + .toggle-label .toggle-track.active {
+  background: #17a2b8;
 }
 
 /* 改變滑塊位置 */

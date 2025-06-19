@@ -73,6 +73,6 @@ def create_app():
     # 註冊藍圖
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
-    app.register_blueprint(api_bp)
+    app.register_blueprint(api_bp, url_prefix='/api')  # 添加 /api 前綴
     
     return app

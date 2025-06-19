@@ -261,14 +261,22 @@ def drive_files():
             if f.get('id'):
                 combined_files_map[f.get('id')] = f
 
-        # Format files
+        # Format files with proper size conversion
         formatted_files = []
         for file_id, file_data in combined_files_map.items():
+            # 確保 size 是數字類型
+            size = file_data.get('size', '0')
+            if isinstance(size, str):
+                try:
+                    size = int(size)
+                except (ValueError, TypeError):
+                    size = 0
+            
             formatted_files.append({
                 'id': file_id,
                 'name': file_data.get('name', '未命名檔案'),
                 'mimeType': file_data.get('mimeType', 'application/octet-stream'),
-                'size': file_data.get('size', 0),
+                'size': size,
                 'parents': file_data.get('parents', [])
             })
         
@@ -292,4 +300,63 @@ def cancel_job_endpoint(job_id):
         
     except Exception as e:
         logging.error(f"API 錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+
+@api_bp.route('/jobs/status/batch', methods=['POST'])
+def get_batch_job_status_endpoint():
+    """批量獲取任務狀態的 API 端點"""
+    try:
+        data = request.get_json()
+        if not data or 'job_ids' not in data:
+            return jsonify({"success": False, "error": "缺少 job_ids 參數"}), 400
+        
+        job_ids = data['job_ids']
+        if not isinstance(job_ids, list):
+            return jsonify({"success": False, "error": "job_ids 必須是陣列"}), 400
+        
+        # 批量獲取任務狀態
+        jobs_status = {}
+        for job_id in job_ids:
+            job_status = processor.get_job_status(job_id)
+            if job_status and 'error' not in job_status:
+                jobs_status[job_id] = job_status
+        
+        return jsonify({
+            "success": True,
+            "jobs": jobs_status
+        })
+        
+    except Exception as e:
+        logging.error(f"批量獲取任務狀態 API 錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+
+@api_bp.route('/jobs/<job_id>/result', methods=['GET'])
+def get_job_result_endpoint(job_id):
+    """獲取任務結果的 API 端點"""
+    try:
+        logging.debug(f"Getting job result for job_id: {job_id}")
+        job_status = processor.get_job_status(job_id)
+        
+        if job_status is None:
+            logging.warning(f"Job {job_id} not found")
+            return jsonify({"success": False, "error": f"Job {job_id} not found"}), 404
+        
+        if 'error' in job_status:
+            logging.warning(f"Error in job status for {job_id}: {job_status['error']}")
+            return jsonify({"success": False, "error": job_status['error']}), 404
+        
+        # 檢查任務是否已完成
+        if job_status.get('status') != 'completed':
+            return jsonify({"success": False, "error": "任務尚未完成"}), 400
+        
+        # 獲取結果數據
+        result_data = job_status.get('result', {})
+        
+        return jsonify({
+            "success": True,
+            "result": result_data
+        })
+        
+    except Exception as e:
+        logging.error(f"獲取任務結果 API 錯誤 for job {job_id}: {e}", exc_info=True)
         return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
