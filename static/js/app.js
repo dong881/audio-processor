@@ -110,11 +110,26 @@ function setupEventListeners() {
         });
     }
     
-    // 處理檔案按鈕
+    // Task Manager 事件監聽器
     if (elements.createTaskBtn) {
         elements.createTaskBtn.addEventListener('click', createNewTask);
     }
-
+    
+    if (elements.refreshTasksBtn) {
+        elements.refreshTasksBtn.addEventListener('click', refreshTasks);
+    }
+    
+    if (elements.toggleTaskManagerBtn) {
+        elements.toggleTaskManagerBtn.addEventListener('click', toggleTaskManager);
+    }
+    
+    // 任務篩選按鈕事件監聽器
+    elements.taskFilterButtons.forEach(button => {
+        button.addEventListener('change', function() {
+            taskManager.currentFilter = this.value;
+            filterTasks();
+        });
+    });
 
     // 錄音資料夾過濾切換開關
     const recordingsFilterToggle = document.getElementById('filter-recordings-toggle');
@@ -326,7 +341,7 @@ function showError(message) {
     // 不再自動消失
 }
 
-// 顯示成功訊息 - 持續顯示直到被替換
+// 顯示成功訊息 - 添加自動消失功能
 function showSuccess(message) {
     // 先移除所有現有的提示訊息
     removeAllAlerts();
@@ -342,7 +357,18 @@ function showSuccess(message) {
     // 添加到頁面頂部
     document.body.insertBefore(successAlert, document.body.firstChild);
     
-    // 不再自動消失
+    // 3秒後自動消失
+    setTimeout(() => {
+        if (successAlert && successAlert.parentNode) {
+            successAlert.classList.remove('show');
+            successAlert.classList.add('fade');
+            setTimeout(() => {
+                if (successAlert.parentNode) {
+                    successAlert.remove();
+                }
+            }, 150); // 等待fade動畫完成
+        }
+    }, 3000);
 }
 
 // 移除所有提示訊息
@@ -736,13 +762,14 @@ function calculateEstimatedTime(currentStage) {
 }
 
 /**
- * 格式化剩餘時間
+ * 格式化剩餘時間 - 移除小數點
  */
 function formatRemainingTime(seconds) {
     if (seconds <= 0) return '即將完成';
     
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
+    const roundedSeconds = Math.round(seconds);
+    const minutes = Math.floor(roundedSeconds / 60);
+    const remainingSeconds = roundedSeconds % 60;
     
     if (minutes > 0) {
         return `約 ${minutes} 分 ${remainingSeconds} 秒`;
@@ -1011,15 +1038,123 @@ function displayTaskResult(result) {
 }
 
 /**
- * 更新任務在UI中的顯示
+ * 更新任務在UI中的顯示 - 優化以減少閃爍
  */
 function updateTaskInUI(task) {
     const taskElement = document.querySelector(`[data-task-id="${task.id}"]`);
-    if (!taskElement) return;
+    if (!taskElement) {
+        // 如果元素不存在，創建新的
+        addTaskToUI(task);
+        return;
+    }
     
-    // 重新建立任務元素
-    const newTaskElement = createTaskElement(task);
-    taskElement.replaceWith(newTaskElement);
+    // 更新狀態屬性
+    taskElement.setAttribute('data-task-status', task.status);
+    
+    // 獲取狀態配置
+    const statusConfig = getStatusConfig(task.status);
+    const progressWidth = Math.max(task.progress, 2);
+    
+    // 只更新需要變更的元素，而不是重新創建整個任務元素
+    
+    // 更新狀態圖標
+    const statusIcon = taskElement.querySelector('.task-title i');
+    if (statusIcon) {
+        statusIcon.className = `${statusConfig.icon} me-2`;
+    }
+    
+    // 更新卡片邊框樣式
+    const card = taskElement.querySelector('.task-card');
+    if (card) {
+        card.className = `card task-card ${statusConfig.cardClass}`;
+    }
+    
+    // 更新狀態文字
+    const statusText = taskElement.querySelector('.task-status-text');
+    if (statusText) {
+        statusText.textContent = statusConfig.label;
+        statusText.className = `task-status-text ${statusConfig.textClass}`;
+    }
+    
+    // 更新進度百分比
+    const progressText = taskElement.querySelector('.task-progress-text');
+    if (progressText) {
+        progressText.textContent = `${task.progress}%`;
+    }
+    
+    // 更新進度條
+    const progressBar = taskElement.querySelector('.progress-bar');
+    if (progressBar) {
+        progressBar.style.width = `${progressWidth}%`;
+        progressBar.setAttribute('aria-valuenow', task.progress);
+        progressBar.className = `progress-bar ${statusConfig.progressClass}`;
+    }
+    
+    // 更新訊息
+    const messageElement = taskElement.querySelector('.task-message small');
+    if (messageElement) {
+        messageElement.innerHTML = `<i class="bi bi-info-circle me-1"></i>${task.message || '處理中...'}`;
+    }
+    
+    // 更新預估時間（僅在處理中時顯示）
+    let etaElement = taskElement.querySelector('.task-eta');
+    if (task.status === 'processing' && task.estimatedCompletion > 0) {
+        if (!etaElement) {
+            // 創建預估時間元素
+            const etaDiv = document.createElement('div');
+            etaDiv.className = 'task-eta mt-1';
+            etaDiv.innerHTML = `
+                <small class="text-muted">
+                    <i class="bi bi-clock me-1"></i>
+                    預估剩餘時間: <span class="eta-text">${formatRemainingTime(task.estimatedCompletion)}</span>
+                </small>
+            `;
+            const messageElement = taskElement.querySelector('.task-message');
+            if (messageElement) {
+                messageElement.after(etaDiv);
+            }
+        } else {
+            // 更新現有的預估時間
+            const etaText = etaElement.querySelector('.eta-text');
+            if (etaText) {
+                etaText.textContent = formatRemainingTime(task.estimatedCompletion);
+            }
+        }
+    } else if (etaElement) {
+        // 移除預估時間元素
+        etaElement.remove();
+    }
+    
+    // 更新時間戳
+    const timestampsElement = taskElement.querySelector('.task-timestamps small');
+    if (timestampsElement) {
+        timestampsElement.innerHTML = `
+            建立時間: ${new Date(task.createdAt).toLocaleString()}
+            ${task.updatedAt !== task.createdAt ? 
+                `| 更新時間: ${new Date(task.updatedAt).toLocaleString()}` : ''
+            }
+        `;
+    }
+    
+    // 更新操作按鈕
+    const actionsElement = taskElement.querySelector('.task-actions');
+    if (actionsElement) {
+        let actionsHTML = '';
+        if (task.status === 'processing' || task.status === 'pending') {
+            actionsHTML = `
+                <button class="btn btn-sm btn-outline-danger" onclick="cancelTask('${task.id}')" title="取消任務">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            `;
+        } else if (task.status === 'completed') {
+            actionsHTML = `
+                <button class="btn btn-sm btn-success" onclick="viewResult('${task.id}')" title="查看結果">
+                    <i class="bi bi-eye"></i>
+                </button>
+            `;
+        }
+        actionsElement.innerHTML = actionsHTML;
+    }
 }
 
 /**

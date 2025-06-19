@@ -176,7 +176,44 @@
                     </div>
                 </div>
 
-                <!-- PDF 附件選擇 (移動到處理控制的下方) -->
+                <!-- 處理結果 -->
+                <div class="card d-none mb-4" id="result-container">
+                    <div class="app-card-header">
+                        <i class="bi bi-check-circle me-2"></i>
+                        處理結果
+                    </div>
+                    <div class="card-body">
+                        <h5 class="card-title mb-3" id="result-title">
+                            <i class="bi bi-file-text me-2"></i>
+                            會議標題
+                        </h5>
+                        
+                        <div class="mb-3">
+                            <h6 class="fw-bold">
+                                <i class="bi bi-blockquote-left me-2"></i>
+                                摘要:
+                            </h6>
+                            <p id="result-summary">摘要內容將顯示在這裡...</p>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <h6 class="fw-bold">
+                                <i class="bi bi-check2-square me-2"></i>
+                                待辦事項:
+                            </h6>
+                            <ul id="result-todos"></ul>
+                        </div>
+                        
+                        <div class="mb-3" id="result-speakers"></div>
+                        
+                        <a href="#" target="_blank" class="btn btn-success w-100 mt-3" id="result-link">
+                            <i class="bi bi-link-45deg me-2"></i>
+                            在 Notion 中查看
+                        </a>
+                    </div>
+                </div>
+
+                <!-- PDF 附件選擇 (移動到處理結果的下方) -->
                 <div class="card mb-4">
                     <div class="app-card-header">
                         <div class="d-flex justify-content-between align-items-center w-100">
@@ -221,43 +258,6 @@
                             </div>
                         </div>
                         <p class="text-end" id="progress-percentage">0%</p>
-                    </div>
-                </div>
-
-                <!-- 處理結果 -->
-                <div class="card d-none" id="result-container">
-                    <div class="app-card-header">
-                        <i class="bi bi-check-circle me-2"></i>
-                        處理結果
-                    </div>
-                    <div class="card-body">
-                        <h5 class="card-title mb-3" id="result-title">
-                            <i class="bi bi-file-text me-2"></i>
-                            會議標題
-                        </h5>
-                        
-                        <div class="mb-3">
-                            <h6 class="fw-bold">
-                                <i class="bi bi-blockquote-left me-2"></i>
-                                摘要:
-                            </h6>
-                            <p id="result-summary">摘要內容將顯示在這裡...</p>
-                        </div>
-                        
-                        <div class="mb-3">
-                            <h6 class="fw-bold">
-                                <i class="bi bi-check2-square me-2"></i>
-                                待辦事項:
-                            </h6>
-                            <ul id="result-todos"></ul>
-                        </div>
-                        
-                        <div class="mb-3" id="result-speakers"></div>
-                        
-                        <a href="#" target="_blank" class="btn btn-success w-100 mt-3" id="result-link">
-                            <i class="bi bi-link-45deg me-2"></i>
-                            在 Notion 中查看
-                        </a>
                     </div>
                 </div>
             </div>

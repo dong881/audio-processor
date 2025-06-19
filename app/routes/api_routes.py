@@ -79,9 +79,15 @@ def process_audio_endpoint():
 def get_job_status_endpoint(job_id):
     """獲取工作狀態的 API 端點"""
     try:
+        logging.debug(f"Getting job status for job_id: {job_id}")
         job_status = processor.get_job_status(job_id)
         
+        if job_status is None:
+            logging.warning(f"Job {job_id} not found")
+            return jsonify({"success": False, "error": f"Job {job_id} not found"}), 404
+        
         if 'error' in job_status:
+            logging.warning(f"Error in job status for {job_id}: {job_status['error']}")
             return jsonify({"success": False, "error": job_status['error']}), 404
             
         return jsonify({
@@ -90,7 +96,7 @@ def get_job_status_endpoint(job_id):
         })
         
     except Exception as e:
-        logging.error(f"API 錯誤: {e}", exc_info=True)
+        logging.error(f"API 錯誤 for job {job_id}: {e}", exc_info=True)
         return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
 
 @api_bp.route('/jobs', methods=['GET'])
