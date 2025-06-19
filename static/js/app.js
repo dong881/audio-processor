@@ -377,8 +377,14 @@ async function checkAuthStatus() {
         const data = await response.json();
         
         if (data.authenticated && data.user) {
-            currentUser = data.user; // 儲存當前用戶資訊
-            return data.user;
+            currentUser = {
+                id: data.user.id || data.user.email || 'unknown_user', // 確保有ID
+                email: data.user.email,
+                name: data.user.name,
+                ...data.user
+            };
+            console.log('當前用戶資訊:', currentUser);
+            return currentUser;
         } else {
             currentUser = null;
             return null;
@@ -392,6 +398,17 @@ async function checkAuthStatus() {
 
 // 顯示已認證用戶界面 - 更新為處理任務恢復
 function showAuthenticatedUI(user) {
+    // 確保 currentUser 全局變數被正確設置
+    if (user) {
+        currentUser = {
+            id: user.id || user.email || 'unknown_user',
+            email: user.email,
+            name: user.name,
+            ...user
+        };
+        console.log('設置全局 currentUser:', currentUser);
+    }
+    
     if (elements.authSection) elements.authSection.classList.add('d-none');
     if (elements.processingSection) elements.processingSection.classList.remove('d-none');
     if (elements.loginButtons.length > 0) {
@@ -824,6 +841,18 @@ async function createNewTask() {
         return;
     }
     
+    // 確保當前用戶資訊存在
+    if (!currentUser) {
+        console.log('currentUser 為空，重新檢查認證狀態');
+        const user = await checkAuthStatus();
+        if (!user) {
+            showError('用戶認證已失效，請重新登入');
+            showUnauthenticatedUI();
+            return;
+        }
+        currentUser = user;
+    }
+    
     // 獲取選中的附件
     const attachmentFileIds = [];
     const checkedAttachments = document.querySelectorAll('.attachment-option:not(.none-option) input[type="checkbox"]:checked');
@@ -880,6 +909,7 @@ async function createNewTask() {
             
             // 立即保存任務
             saveCurrentTasks();
+            console.log(`任務 ${data.job_id} 已建立並保存到 localStorage`);
             
             showSuccess(`任務已建立成功！任務ID: ${data.job_id.substring(0, 8)}...`);
             
@@ -1102,9 +1132,11 @@ function updateTaskCounts() {
         activeCountElement.className = activeTasks.length > 0 ? 'badge bg-primary ms-2' : 'badge bg-secondary ms-2';
     }
     
-    // 自動保存任務
-    if (currentUser && currentUser.id) {
+    // 確保有當前用戶時才自動保存任務
+    if (currentUser && (currentUser.id || currentUser.email)) {
         saveCurrentTasks();
+    } else {
+        console.log('跳過自動保存：用戶資訊不完整');
     }
 }
 
@@ -1307,6 +1339,7 @@ document.addEventListener('visibilitychange', () => {
             task => task.status === 'pending' || task.status === 'processing'
         );
         if (activeTasks.length > 0 && !taskManager.updateTimer) {
+            console.log(`頁面重新顯示，恢復 ${activeTasks.length} 個活躍任務的輪詢`);
             startTaskPolling();
         }
     }
@@ -1315,6 +1348,7 @@ document.addEventListener('visibilitychange', () => {
 // 定期自動保存（每30秒）
 setInterval(() => {
     if (currentUser && Object.keys(taskManager.tasks).length > 0) {
+        console.log('定期自動保存任務狀態');
         saveCurrentTasks();
     }
 }, 30000);
@@ -1326,6 +1360,16 @@ setInterval(() => {
  */
 function restoreUserTasks(userId) {
     try {
+        // 確保有有效的用戶ID
+        if (!userId && currentUser) {
+            userId = currentUser.id || currentUser.email;
+        }
+        
+        if (!userId) {
+            console.log('無法恢復任務：用戶ID不存在');
+            return;
+        }
+        
         console.log(`正在恢復用戶 ${userId} 的任務...`);
         
         // 執行日常清理檢查
@@ -1336,6 +1380,9 @@ function restoreUserTasks(userId) {
         // 載入用戶任務
         const savedTasks = taskPersistence.loadTasks(userId);
         taskManager.tasks = savedTasks;
+        
+        console.log(`從 localStorage 載入的任務數據:`, savedTasks);
+        console.log(`任務 IDs:`, Object.keys(savedTasks));
         
         // 更新UI
         refreshTasksUI();
@@ -1348,6 +1395,7 @@ function restoreUserTasks(userId) {
         
         if (activeTasks.length > 0) {
             console.log(`發現 ${activeTasks.length} 個活躍任務，開始輪詢狀態`);
+            console.log(`活躍任務詳情:`, activeTasks.map(t => ({ id: t.id, status: t.status, fileName: t.fileName })));
             startTaskPolling();
         }
         
@@ -1362,10 +1410,41 @@ function restoreUserTasks(userId) {
  * 保存當前任務
  */
 function saveCurrentTasks() {
-    if (!currentUser || !currentUser.id) return;
+    if (!currentUser) {
+        console.log('無法保存任務：當前用戶為 null，嘗試重新檢查認證狀態');
+        // 嘗試從認證系統重新獲取用戶資訊
+        checkAuthStatus().then(user => {
+            if (user) {
+                currentUser = user;
+                console.log('重新獲取用戶資訊成功，再次嘗試保存任務');
+                saveCurrentTasks();
+            }
+        });
+        return;
+    }
+    
+    if (!currentUser.id && !currentUser.email) {
+        console.log('無法保存任務：當前用戶資訊不完整', currentUser);
+        return;
+    }
     
     try {
-        taskPersistence.saveTasks(currentUser.id, taskManager.tasks);
+        // 使用 email 作為備用 ID
+        const userId = currentUser.id || currentUser.email;
+        const taskCount = Object.keys(taskManager.tasks).length;
+        console.log(`正在為用戶 ${userId} 保存 ${taskCount} 個任務`);
+        
+        if (taskCount > 0) {
+            console.log('保存的任務詳情:', Object.values(taskManager.tasks).map(t => ({ 
+                id: t.id, 
+                status: t.status, 
+                fileName: t.fileName,
+                progress: t.progress 
+            })));
+        }
+        
+        taskPersistence.saveTasks(userId, taskManager.tasks);
+        console.log(`任務保存完成`);
     } catch (error) {
         console.error('保存任務失敗:', error);
     }
@@ -1447,6 +1526,8 @@ async function updateTasksStatus() {
         return;
     }
     
+    console.log(`正在更新 ${activeTasks.length} 個活躍任務的狀態...`);
+    
     try {
         // 批量檢查所有活躍任務的狀態
         const taskIds = activeTasks.map(task => task.id);
@@ -1476,6 +1557,8 @@ async function updateTasksStatus() {
                     const oldStatus = taskManager.tasks[jobId].status;
                     const oldProgress = taskManager.tasks[jobId].progress;
                     
+                    console.log(`任務 ${jobId} 狀態更新: ${oldStatus} -> ${jobData.status}, 進度: ${oldProgress}% -> ${jobData.progress}%`);
+                    
                     // 更新任務資料
                     updateTaskData(taskManager.tasks[jobId], jobData);
                     
@@ -1500,6 +1583,8 @@ async function updateTasksStatus() {
             if (hasUpdates) {
                 updateTaskCounts();
                 filterTasks();
+                // 立即保存更新後的任務狀態
+                saveCurrentTasks();
             }
         }
     } catch (error) {
@@ -1595,7 +1680,8 @@ async function viewResult(taskId) {
         const response = await fetch(`${API_BASE_URL}/api/jobs/${taskId}/result`);
         
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: 獲取結果失敗`);
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`HTTP ${response.status}: ${errorData.error || '獲取結果失敗'}`);
         }
         
         const data = await response.json();
@@ -1761,7 +1847,8 @@ async function cancelTask(taskId) {
         });
         
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: 取消任務失敗`);
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`HTTP ${response.status}: ${errorData.error || '取消任務失敗'}`);
         }
         
         const data = await response.json();
@@ -1786,5 +1873,74 @@ async function cancelTask(taskId) {
     } catch (error) {
         console.error('取消任務失敗:', error);
         showError(`取消任務失敗: ${error.message}`);
+    }
+}
+
+/**
+ * 查看任務結果
+ */
+async function viewResult(taskId) {
+    const task = taskManager.tasks[taskId];
+    if (!task) {
+        showError('找不到任務資料');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/jobs/${taskId}/result`);
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`HTTP ${response.status}: ${errorData.error || '獲取結果失敗'}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success && data.result) {
+            displayTaskResult(task, data.result);
+        } else {
+            throw new Error(data.error || '獲取結果失敗');
+        }
+    } catch (error) {
+        console.error('獲取任務結果失敗:', error);
+        showError(`獲取結果失敗: ${error.message}`);
+    }
+}
+
+/**
+ * 顯示任務結果
+ */
+function displayTaskResult(task, result) {
+    // 更新結果顯示區域
+    if (elements.resultTitle) {
+        elements.resultTitle.textContent = `處理結果 - ${task.fileName}`;
+    }
+    
+    if (elements.resultSummary && result.summary) {
+        elements.resultSummary.innerHTML = result.summary.replace(/\n/g, '<br>');
+    }
+    
+    if (elements.resultTodos && result.todos) {
+        elements.resultTodos.innerHTML = Array.isArray(result.todos) 
+            ? result.todos.map(todo => `<li>${todo}</li>`).join('')
+            : result.todos.replace(/\n/g, '<br>');
+    }
+    
+    if (elements.resultSpeakers && result.speakers) {
+        elements.resultSpeakers.innerHTML = Array.isArray(result.speakers)
+            ? result.speakers.map(speaker => `<li>${speaker}</li>`).join('')
+            : result.speakers.replace(/\n/g, '<br>');
+    }
+    
+    if (elements.resultLink && result.document_url) {
+        elements.resultLink.href = result.document_url;
+        elements.resultLink.textContent = '查看完整文件';
+        elements.resultLink.style.display = 'inline-block';
+    }
+    
+    // 顯示結果區域
+    if (elements.resultContainer) {
+        elements.resultContainer.classList.remove('d-none');
+        elements.resultContainer.scrollIntoView({ behavior: 'smooth' });
     }
 }

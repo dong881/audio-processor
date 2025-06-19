@@ -291,16 +291,27 @@ def drive_files():
 def cancel_job_endpoint(job_id):
     """取消指定任務的 API 端點"""
     try:
+        logging.info(f"嘗試取消任務: {job_id}")
+        
+        # 檢查任務是否存在
+        with processor.jobs_lock:
+            if job_id not in processor.jobs:
+                logging.warning(f"任務 {job_id} 不存在於 processor.jobs 中")
+                return jsonify({"success": False, "error": "任務不存在"}), 404
+        
+        # 嘗試取消任務
         result = processor.cancel_job(job_id)
         
-        if not result['success']:
+        if not result.get('success', False):
+            logging.warning(f"取消任務 {job_id} 失敗: {result.get('error', '未知錯誤')}")
             return jsonify(result), 400
             
+        logging.info(f"任務 {job_id} 取消成功")
         return jsonify(result)
         
     except Exception as e:
-        logging.error(f"API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        logging.error(f"取消任務 API 錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"伺服器內部錯誤: {str(e)}"}), 500
 
 @api_bp.route('/jobs/status/batch', methods=['POST'])
 def get_batch_job_status_endpoint():

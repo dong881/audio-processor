@@ -73,6 +73,22 @@ async function logoutUser() {
         // 设置登出标记，防止自动重定向
         sessionStorage.setItem('logout_in_progress', 'true');
         
+        // 清理所有用戶相關的任務資料
+        if (typeof currentUser !== 'undefined' && currentUser && currentUser.id) {
+            console.log(`登出時清理用戶 ${currentUser.id} 的任務資料`);
+            
+            // 清理任務持久化資料
+            if (typeof taskPersistence !== 'undefined') {
+                taskPersistence.clearUserData(currentUser.id);
+            }
+            
+            // 清理其他用戶相關的 localStorage 項目
+            const userTasksKey = `audioProcessor_tasks_${currentUser.id}`;
+            const userCleanupKey = `audioProcessor_cleanup_${currentUser.id}`;
+            localStorage.removeItem(userTasksKey);
+            localStorage.removeItem(userCleanupKey);
+        }
+        
         const response = await fetch('/api/auth/logout', {
             method: 'POST'
         });
@@ -89,6 +105,14 @@ async function logoutUser() {
             sessionStorage.removeItem('login_redirect_attempted');
             localStorage.removeItem('filter-recordings-enabled');
             localStorage.removeItem('filter-pdf-enabled');
+            
+            // 清理可能遺留的任務相關資料
+            Object.keys(localStorage).forEach(key => {
+                if (key.startsWith('audioProcessor_')) {
+                    console.log(`清理遺留的任務資料: ${key}`);
+                    localStorage.removeItem(key);
+                }
+            });
             
             // 延迟一点时间确保登出请求完成，然后跳转
             setTimeout(() => {
