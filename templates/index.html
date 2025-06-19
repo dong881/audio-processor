@@ -114,26 +114,68 @@
             </div>
             <!-- 處理與結果區域 -->
             <div class="col-lg-6">
-                <!-- 處理控制區域 -->
+                <!-- Task Manager 區域 - 取代原有的處理控制區域 -->
                 <div class="card mb-4">
                     <div class="app-card-header">
-                        <i class="bi bi-gear me-2"></i>
-                        處理控制
+                        <div class="d-flex justify-content-between align-items-center w-100">
+                            <span><i class="bi bi-cpu me-2"></i>任務管理中心</span>
+                            <div class="header-controls">
+                                <button class="btn btn-sm btn-outline-primary" id="refresh-tasks-btn" title="重新整理任務狀態">
+                                    <i class="bi bi-arrow-clockwise" id="refresh-tasks-icon"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary" id="toggle-task-manager-btn" title="展開/收合任務管理器">
+                                    <i class="bi bi-chevron-down" id="toggle-task-icon"></i>
+                                </button>
+                            </div>
+                        </div>
                     </div>
                     <div class="card-body">
-                        <button class="btn btn-success w-100" id="process-btn">
-                            <i class="bi bi-play-circle me-2"></i> 處理選中的檔案
-                        </button>
-                        <!-- 活躍任務按鈕 -->
-                        <div class="mt-3">
-                            <button class="btn btn-outline-secondary w-100" id="show-active-jobs-btn">
-                                <i class="bi bi-list-task me-2"></i> 活躍任務
+                        <!-- 新任務提交區域 -->
+                        <div class="task-submit-section mb-4">
+                            <h6 class="fw-bold mb-3">
+                                <i class="bi bi-plus-circle me-2"></i>建立新任務
+                            </h6>
+                            <button class="btn btn-success w-100" id="create-task-btn">
+                                <i class="bi bi-play-circle me-2"></i>開始處理選中的檔案
                             </button>
-                            <!-- 活躍任務列表 (預設隱藏) -->
-                            <div class="mt-3 d-none" id="jobs-list"></div>
                         </div>
-                    </div>  
+                        
+                        <!-- 任務管理器主體 -->
+                        <div class="task-manager-content" id="task-manager-content">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h6 class="fw-bold mb-0">
+                                    <i class="bi bi-list-task me-2"></i>任務列表
+                                    <span class="badge bg-primary ms-2" id="active-tasks-count">0</span>
+                                </h6>
+                                <div class="task-filter-buttons">
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <input type="radio" class="btn-check" name="task-filter" id="filter-active" value="active" checked>
+                                        <label class="btn btn-outline-primary" for="filter-active">進行中</label>
+                                        
+                                        <input type="radio" class="btn-check" name="task-filter" id="filter-completed" value="completed">
+                                        <label class="btn btn-outline-success" for="filter-completed">已完成</label>
+                                        
+                                        <input type="radio" class="btn-check" name="task-filter" id="filter-failed" value="failed">
+                                        <label class="btn btn-outline-danger" for="filter-failed">失敗</label>
+                                        
+                                        <input type="radio" class="btn-check" name="task-filter" id="filter-all" value="all">
+                                        <label class="btn btn-outline-secondary" for="filter-all">全部</label>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 任務列表容器 -->
+                            <div class="tasks-container" id="tasks-container">
+                                <div class="task-empty-state text-center py-4">
+                                    <i class="bi bi-inbox text-muted" style="font-size: 3rem;"></i>
+                                    <p class="text-muted mt-2">目前沒有任務</p>
+                                    <small class="text-muted">選擇音訊檔案後點擊上方按鈕開始處理</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
+
                 <!-- PDF 附件選擇 (移動到處理控制的下方) -->
                 <div class="card mb-4">
                     <div class="app-card-header">

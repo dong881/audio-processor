@@ -8,7 +8,6 @@ import json
 import re
 import time
 import logging
-import uuid
 import threading
 from datetime import datetime
 from typing import Dict, List, Tuple, Any, Optional
@@ -63,6 +62,9 @@ class AudioProcessor:
         self.jobs_lock = threading.Lock()
         # 初始化 Notion 格式化工具
         self.notion_formatter = NotionFormatter()
+        # 任務取消支援
+        self.cancelled_jobs = set()  # 存儲已取消的任務ID
+        
         # 初始化服務
         self.init_services()
 
@@ -1145,16 +1147,61 @@ class AudioProcessor:
         logging.info(f"✅ 音檔處理完成，共 {len(segments)} 個段落")
         return transcript_full, segments, list(original_speakers)
 
+    def create_job(self, job_id: str, file_id: str, attachment_file_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+        """創建一個新的處理任務"""
+        job_data = {
+            'id': job_id,
+            'file_id': file_id,
+            'attachment_file_ids': attachment_file_ids,
+            'status': JOB_STATUS['PENDING'],
+            'progress': 0,
+            'message': '任務已創建，等待處理...',
+            'created_at': datetime.now().isoformat(),
+            'updated_at': datetime.now().isoformat()
+        }
+        
+        with self.jobs_lock:
+            self.jobs[job_id] = job_data
+            
+        logging.info(f"✅ 任務已創建: {job_id}")
+        return job_data
+
+    def process_file_async(self, job_id: str, file_id: str, attachment_file_ids: Optional[List[str]] = None):
+        """非同步處理音頻檔案"""
+        # 提交任務到線程池
+        future = self.executor.submit(self._process_file_job, job_id, file_id, attachment_file_ids)
+        
+        # 可以選擇保存 future 引用以便後續取消操作
+        with self.jobs_lock:
+            if job_id in self.jobs:
+                self.jobs[job_id]['future'] = future
+        
+        return future
+
     def _process_file_job(self, job_id: str, file_id: str, attachment_file_ids: Optional[List[str]] = None):
         """後台處理音頻檔案的工作函數 (在線程中執行)"""
-        main_temp_dir = None
         attachments_temp_dir = None
-        downloaded_pdf_paths = []
-        context_summary = ""
-        attachment_texts = []
 
         try:
             logging.info(f"[Job {job_id}] 開始處理 file_id: {file_id}")
+            
+            # 確保任務存在
+            with self.jobs_lock:
+                if job_id not in self.jobs:
+                    logging.error(f"[Job {job_id}] ❌ 任務不存在於 jobs 字典中")
+                    return
+            
+            # 檢查是否已被取消
+            if self._is_job_cancelled(job_id):
+                self._handle_job_cancellation(job_id)
+                return
+            
+            # 更新狀態為處理中
+            with self.jobs_lock:
+                if job_id in self.jobs:  # 再次檢查，確保安全
+                    self.jobs[job_id]['status'] = JOB_STATUS['PROCESSING']
+                    self.jobs[job_id]['message'] = '開始處理任務...'
+                    self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
             
             # 獲取原始檔案名稱
             try:
@@ -1163,52 +1210,72 @@ class AudioProcessor:
                 ).execute()
                 original_filename = file_meta.get('name', '')
                 logging.info(f"[Job {job_id}] 原始檔案名稱: {original_filename}")
+                
+                with self.jobs_lock:
+                    self.jobs[job_id]['message'] = f'準備下載檔案: {original_filename}'
+                    self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                    
             except Exception as e:
                 logging.error(f"[Job {job_id}] ❌ 獲取原始檔案名稱失敗: {e}")
                 original_filename = ""
             
-            # 更新進度: 10%
-            with self.jobs_lock:
-                self.jobs[job_id]['progress'] = 10
-                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            # 更新進度: 5% - 準備階段
+            self._update_job_progress(job_id, 5, '準備下載檔案...')
+            if self._is_job_cancelled(job_id):
+                self._handle_job_cancellation(job_id)
+                return
             
             # 處理附件 (如果有)
+            attachment_texts = []
             if attachment_file_ids:
-                attachment_texts = []
-                for attachment_file_id in attachment_file_ids:
+                self._update_job_progress(job_id, 8, '正在下載附件檔案...')
+                for i, attachment_file_id in enumerate(attachment_file_ids):
+                    if self._is_job_cancelled(job_id):
+                        self._handle_job_cancellation(job_id)
+                        return
+                        
                     attachment_text, attachment_temp_dir = self.download_and_extract_text(attachment_file_id)
                     attachment_texts.append(attachment_text)
                     if attachment_temp_dir:
                         attachments_temp_dir = attachment_temp_dir
+                    
+                    # 更新附件下載進度
+                    progress = 8 + (i + 1) * 2  # 每個附件2%進度
+                    self._update_job_progress(job_id, progress, f'已下載附件 {i+1}/{len(attachment_file_ids)}')
             
-            # 更新進度: 20%
-            with self.jobs_lock:
-                self.jobs[job_id]['progress'] = 20
-                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            # 更新進度: 15% - 下載音訊檔案
+            self._update_job_progress(job_id, 15, '正在下載音訊檔案...')
+            if self._is_job_cancelled(job_id):
+                self._handle_job_cancellation(job_id)
+                return
             
             # 下載音頻檔案
             audio_path, audio_temp_dir = self.download_from_drive(file_id)
             
-            # 更新進度: 30%
-            with self.jobs_lock:
-                self.jobs[job_id]['progress'] = 30
-                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            # 更新進度: 25% - 轉換音訊格式
+            self._update_job_progress(job_id, 25, '正在轉換音訊格式...')
+            if self._is_job_cancelled(job_id):
+                self._handle_job_cancellation(job_id)
+                return
             
             # 處理音頻: 轉錄和說話人分離
+            self._update_job_progress(job_id, 30, '正在進行語音轉錄...')
             _, segments, original_speakers = self.process_audio(audio_path)
             
-            # 更新進度: 60%
-            with self.jobs_lock:
-                self.jobs[job_id]['progress'] = 60
-                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            # 更新進度: 65% - 分析說話人
+            self._update_job_progress(job_id, 65, '正在分析說話人...')
+            if self._is_job_cancelled(job_id):
+                self._handle_job_cancellation(job_id)
+                return
                 
             # 識別說話人
             speaker_map = self.identify_speakers(segments, original_speakers)
             
-            # 更新進度: 70%
-            with self.jobs_lock:
-                self.jobs[job_id]['progress'] = 70
-                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            # 更新進度: 75% - 準備內容
+            self._update_job_progress(job_id, 75, '正在整理轉錄內容...')
+            if self._is_job_cancelled(job_id):
+                self._handle_job_cancellation(job_id)
+                return
             
             # 準備輸出
             updated_segments = []
@@ -1220,10 +1287,11 @@ class AudioProcessor:
                 updated_segments.append({**seg, "speaker": identified_speaker})
                 transcript_for_summary += f"[{identified_speaker}]: {seg['text']}\n"
             
-            # 更新進度: 75%
-            with self.jobs_lock:
-                self.jobs[job_id]['progress'] = 75
-                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            # 更新進度: 80% - 生成摘要
+            self._update_job_progress(job_id, 80, '正在生成會議摘要...')
+            if self._is_job_cancelled(job_id):
+                self._handle_job_cancellation(job_id)
+                return
             
             # 生成摘要
             summary_data = self.generate_summary(transcript_for_summary, attachment_texts[0] if attachment_texts else None)
@@ -1231,23 +1299,24 @@ class AudioProcessor:
             summary = summary_data["summary"]
             todos = summary_data["todos"]
             
-            # 更新進度: 85%
-            with self.jobs_lock:
-                self.jobs[job_id]['progress'] = 85
-                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            # 更新進度: 90% - 建立 Notion 頁面
+            self._update_job_progress(job_id, 90, '正在建立 Notion 頁面...')
+            if self._is_job_cancelled(job_id):
+                self._handle_job_cancellation(job_id)
+                return
             
             # 建立 Notion 頁面
             page_id, page_url = self.create_notion_page(
                 title, summary, todos, updated_segments, speaker_map, file_id
             )
             
-            # 更新進度: 95%
-            with self.jobs_lock:
-                self.jobs[job_id]['progress'] = 95
-                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            # 更新進度: 95% - 整理檔案
+            self._update_job_progress(job_id, 95, '正在整理 Google Drive 檔案...')
+            if self._is_job_cancelled(job_id):
+                self._handle_job_cancellation(job_id)
+                return
             
             # 重命名 Google Drive 檔案 (可選)
-            # 從原始檔名提取日期，如果無法提取則使用當前日期
             file_date = None
             if original_filename:
                 file_date = self.extract_date_from_filename(original_filename)
@@ -1268,9 +1337,11 @@ class AudioProcessor:
                 "drive_filename": new_filename
             }
             
+            # 更新進度: 100% - 完成
             with self.jobs_lock:
                 self.jobs[job_id]['status'] = JOB_STATUS['COMPLETED']
                 self.jobs[job_id]['progress'] = 100
+                self.jobs[job_id]['message'] = '任務處理完成！'
                 self.jobs[job_id]['result'] = result
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
             
@@ -1278,6 +1349,11 @@ class AudioProcessor:
             return result
 
         except Exception as e:
+            # 檢查是否為取消操作導致的異常
+            if self._is_job_cancelled(job_id):
+                self._handle_job_cancellation(job_id)
+                return
+                
             logging.error(f"[Job {job_id}] ❌ 處理失敗: {e}", exc_info=True)
             
             # 準備錯誤結果
@@ -1299,49 +1375,69 @@ class AudioProcessor:
             }
             
             with self.jobs_lock:
-                self.jobs[job_id]['status'] = JOB_STATUS['FAILED']
-                self.jobs[job_id]['progress'] = 100
-                self.jobs[job_id]['result'] = error_result
-                self.jobs[job_id]['error'] = str(e)
-                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                if job_id in self.jobs:  # 確保任務存在才更新
+                    self.jobs[job_id]['status'] = JOB_STATUS['FAILED']
+                    self.jobs[job_id]['progress'] = 100
+                    self.jobs[job_id]['message'] = f'處理失敗: {str(e)}'
+                    self.jobs[job_id]['result'] = error_result
+                    self.jobs[job_id]['error'] = str(e)
+                    self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
             
             return error_result
 
         finally:
             # 清理臨時檔案
-            if audio_temp_dir and os.path.exists(audio_temp_dir):
+            if 'audio_temp_dir' in locals() and audio_temp_dir and os.path.exists(audio_temp_dir):
                 logging.info(f"[Job {job_id}] 🧹 清理音檔臨時目錄")
                 shutil.rmtree(audio_temp_dir)
-            if attachments_temp_dir and os.path.exists(attachments_temp_dir):
+            if 'attachments_temp_dir' in locals() and attachments_temp_dir and os.path.exists(attachments_temp_dir):
                 logging.info(f"[Job {job_id}] 🧹 清理附件臨時目錄")
                 shutil.rmtree(attachments_temp_dir)
 
-    def process_file_async(self, file_id: str, attachment_file_ids: Optional[List[str]] = None) -> str:
-        """非同步處理檔案，返回工作 ID"""
-        # 生成唯一工作 ID
-        job_id = str(uuid.uuid4())
-        
-        # 初始化工作狀態
+    def _update_job_progress(self, job_id: str, progress: int, message: str):
+        """安全地更新任務進度"""
         with self.jobs_lock:
-            self.jobs[job_id] = {
-                'id': job_id,
-                'file_id': file_id,
-                'attachment_file_ids': attachment_file_ids,
-                'status': JOB_STATUS['PENDING'],
-                'progress': 0,
-                'created_at': datetime.now().isoformat(),
-                'updated_at': datetime.now().isoformat(),
-                'result': None,
-                'error': None
-            }
+            if job_id in self.jobs:
+                self.jobs[job_id]['progress'] = progress
+                self.jobs[job_id]['message'] = message
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+
+    def _is_job_cancelled(self, job_id: str) -> bool:
+        """檢查任務是否已被取消"""
+        return job_id in self.cancelled_jobs
+
+    def _handle_job_cancellation(self, job_id: str):
+        """處理任務取消"""
+        with self.jobs_lock:
+            if job_id in self.jobs:
+                self.jobs[job_id]['status'] = 'cancelled'
+                self.jobs[job_id]['progress'] = 100
+                self.jobs[job_id]['message'] = '任務已被使用者取消'
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
         
-        # 提交工作到線程池
-        self.executor.submit(
-            self._process_file_job, job_id, file_id, attachment_file_ids
-        )
+        logging.info(f"[Job {job_id}] 任務已取消")
+
+    def cancel_job(self, job_id: str) -> Dict[str, Any]:
+        """取消指定的任務"""
+        with self.jobs_lock:
+            job = self.jobs.get(job_id)
+            
+        if not job:
+            return {'success': False, 'error': '任務不存在'}
         
-        return job_id
-    
+        if job['status'] in [JOB_STATUS['COMPLETED'], JOB_STATUS['FAILED']]:
+            return {'success': False, 'error': '任務已完成或失敗，無法取消'}
+        
+        # 標記任務為已取消
+        self.cancelled_jobs.add(job_id)
+        
+        # 如果任務還在等待中，直接更新狀態
+        if job['status'] == JOB_STATUS['PENDING']:
+            self._handle_job_cancellation(job_id)
+        
+        logging.info(f"任務 {job_id} 已標记為取消")
+        return {'success': True, 'message': '任務取消請求已提交'}
+
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
         """獲取工作狀態"""
         with self.jobs_lock:
@@ -1350,34 +1446,26 @@ class AudioProcessor:
         if not job:
             return {'error': '工作不存在'}
         
+        # 基本任務信息
+        result = {
+            'id': job['id'],
+            'status': job['status'],
+            'progress': job['progress'],
+            'created_at': job['created_at'],
+            'updated_at': job['updated_at']
+        }
+        
+        # 添加訊息（如果有）
+        if 'message' in job:
+            result['message'] = job['message']
+        
         # 根據工作狀態返回不同信息
         if job['status'] == JOB_STATUS['COMPLETED']:
-            return {
-                'id': job['id'],
-                'status': job['status'],
-                'progress': job['progress'],
-                'created_at': job['created_at'],
-                'updated_at': job['updated_at'],
-                'result': job['result']
-            }
+            result['result'] = job.get('result')
         elif job['status'] == JOB_STATUS['FAILED']:
-            return {
-                'id': job['id'],
-                'status': job['status'],
-                'progress': job['progress'],
-                'created_at': job['created_at'],
-                'updated_at': job['updated_at'],
-                'error': job['error']
-            }
-        else:
-            # 處理中或等待中
-            return {
-                'id': job['id'],
-                'status': job['status'],
-                'progress': job['progress'],
-                'created_at': job['created_at'],
-                'updated_at': job['updated_at']
-            }
+            result['error'] = job.get('error')
+        
+        return result
 
     def update_job_progress(self, job_id: str, progress: int, message: str, status: Optional[str] = None, error: Optional[str] = None, result_url: Optional[str] = None, notion_page_id: Optional[str] = None):
         """更新指定工作的進度、狀態、訊息、錯誤和結果URL"""

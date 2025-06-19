@@ -269,6 +269,41 @@ A health check endpoint is available that also shows the number of active jobs:
 }
 ```
 
+### Cancel Job
+
+Send a POST request to the `/job/<job_id>/cancel` endpoint to cancel a running or pending job.
+
+**Endpoint:** `POST /job/<job_id>/cancel`
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/job/12345678-1234-5678-1234-567812345678/cancel
+```
+
+**Success Response:**
+```json
+{
+  "success": true,
+  "message": "任務取消請求已提交"
+}
+```
+
+**Error Response (Job Not Found):**
+```json
+{
+  "success": false,
+  "error": "任務不存在"
+}
+```
+
+**Error Response (Job Cannot Be Cancelled):**
+```json
+{
+  "success": false,
+  "error": "任務已完成或失敗，無法取消"
+}
+```
+
 ## Updating the Application
 
 A management script `manage_service.sh` is provided to simplify common operations with the Docker service.

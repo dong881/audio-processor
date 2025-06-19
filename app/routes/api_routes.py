@@ -1,4 +1,5 @@
 import os
+import uuid
 import logging
 from datetime import datetime
 from flask import Blueprint, request, jsonify, session, current_app
@@ -55,14 +56,19 @@ def process_audio_endpoint():
             if not attachment_file_ids:  # Treat empty list as no attachments
                 attachment_file_ids = None
 
-        # 提交工作
-        job_id = processor.process_file_async(file_id, attachment_file_ids=attachment_file_ids)
+        # 生成工作ID並創建工作
+        job_id = str(uuid.uuid4())
+        job_data = processor.create_job(job_id, file_id, attachment_file_ids)
+        
+        # 提交工作到線程池進行非同步處理
+        processor.process_file_async(job_id, file_id, attachment_file_ids)
         
         # 立即返回工作ID
         return jsonify({
             "success": True,
             "message": "工作已提交，正在後台處理",
-            "job_id": job_id
+            "job_id": job_id,
+            "job_status": job_data['status']
         })
 
     except Exception as e:
@@ -266,3 +272,18 @@ def drive_files():
     except Exception as e:
         logging.error(f"獲取 Google Drive 檔案列表時發生錯誤: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'error': f'獲取檔案列表失敗: {str(e)}'}), 500
+
+@api_bp.route('/job/<job_id>/cancel', methods=['POST'])
+def cancel_job_endpoint(job_id):
+    """取消指定任務的 API 端點"""
+    try:
+        result = processor.cancel_job(job_id)
+        
+        if not result['success']:
+            return jsonify(result), 400
+            
+        return jsonify(result)
+        
+    except Exception as e:
+        logging.error(f"API 錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
