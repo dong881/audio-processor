@@ -1837,14 +1837,49 @@ function updateTaskElementUI(taskId, task) {
  * 取消任務 - 修復API路徑並添加調試信息
  */
 async function cancelTask(taskId) {
-    if (!confirm('確定要取消這個任務嗎？')) {
-        return;
-    }
-    
     console.log(`嘗試取消任務: ${taskId}`);
     console.log(`當前本地任務狀態:`, taskManager.tasks[taskId]);
     
+    // 使用 SweetAlert2 美化確認對話框
+    const result = await Swal.fire({
+        title: '確認取消任務',
+        text: '您確定要取消這個任務嗎？此操作無法撤銷。',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#dc3545',
+        cancelButtonColor: '#6c757d',
+        confirmButtonText: '<i class="bi bi-check-lg me-2"></i>確定取消',
+        cancelButtonText: '<i class="bi bi-x-lg me-2"></i>保持執行',
+        reverseButtons: true,
+        customClass: {
+            popup: 'swal-popup-custom',
+            title: 'swal-title-custom',
+            content: 'swal-content-custom',
+            confirmButton: 'btn btn-danger',
+            cancelButton: 'btn btn-secondary'
+        },
+        buttonsStyling: false,
+        focusCancel: true
+    });
+
+    if (!result.isConfirmed) {
+        return;
+    }
+    
     try {
+        // 顯示處理中的提示
+        Swal.fire({
+            title: '正在取消任務...',
+            text: '請稍候，正在處理您的請求',
+            icon: 'info',
+            allowOutsideClick: false,
+            allowEscapeKey: false,
+            showConfirmButton: false,
+            didOpen: () => {
+                Swal.showLoading();
+            }
+        });
+
         const response = await fetch(`${API_BASE_URL}/api/job/${taskId}/cancel`, {
             method: 'POST'
         });
@@ -1875,13 +1910,36 @@ async function cancelTask(taskId) {
                 console.log(`本地任務狀態已更新為已取消`);
             }
             
-            showSuccess('任務已成功取消');
+            // 顯示成功訊息
+            await Swal.fire({
+                title: '任務已取消',
+                text: '您的任務已成功取消',
+                icon: 'success',
+                confirmButtonText: '<i class="bi bi-check-lg me-2"></i>確定',
+                customClass: {
+                    confirmButton: 'btn btn-success'
+                },
+                buttonsStyling: false,
+                timer: 3000,
+                timerProgressBar: true
+            });
         } else {
             throw new Error(data.error || '取消任務失敗');
         }
     } catch (error) {
         console.error('取消任務失敗:', error);
-        showError(`取消任務失敗: ${error.message}`);
+        
+        // 顯示錯誤訊息
+        await Swal.fire({
+            title: '取消失敗',
+            text: `取消任務時發生錯誤：${error.message}`,
+            icon: 'error',
+            confirmButtonText: '<i class="bi bi-exclamation-triangle me-2"></i>確定',
+            customClass: {
+                confirmButton: 'btn btn-danger'
+            },
+            buttonsStyling: false
+        });
     }
 }
 

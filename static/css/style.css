@@ -1497,3 +1497,157 @@ p {
         padding: 0.25rem 0.5rem;
     }
 }
+
+/***************************************
+ * 20. SWEETALERT2 CUSTOM STYLES
+ ***************************************/
+/* SweetAlert2 自定義樣式 */
+.swal-popup-custom {
+    border-radius: var(--radius-lg) !important;
+    box-shadow: var(--shadow-lg) !important;
+    border: none !important;
+}
+
+.swal-title-custom {
+    color: var(--primary-color) !important;
+    font-size: 1.5rem !important;
+    font-weight: 600 !important;
+    margin-bottom: 1rem !important;
+}
+
+.swal-content-custom {
+    color: var(--text-color) !important;
+    font-size: 1rem !important;
+    line-height: 1.5 !important;
+}
+
+/* SweetAlert2 按鈕容器樣式 */
+.swal2-actions {
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+    gap: 1rem !important;
+    margin-top: 1.5rem !important;
+    padding: 0 1rem !important;
+    flex-wrap: wrap !important;
+}
+
+/* SweetAlert2 按鈕樣式覆蓋 */
+.swal2-styled.btn {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 0.5rem !important;
+    padding: 0.75rem 1.5rem !important;
+    font-weight: 500 !important;
+    border-radius: var(--radius-sm) !important;
+    border: none !important;
+    cursor: pointer !important;
+    transition: all var(--transition-fast) !important;
+    font-size: var(--font-size-base) !important;
+    text-decoration: none !important;
+    margin: 0 !important;
+    min-width: 120px !important;
+    white-space: nowrap !important;
+}
+
+.swal2-styled.btn:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: var(--shadow-sm) !important;
+}
+
+.swal2-styled.btn-danger {
+    background-color: #dc3545 !important;
+    color: white !important;
+}
+
+.swal2-styled.btn-danger:hover {
+    background-color: #c82333 !important;
+    color: white !important;
+}
+
+.swal2-styled.btn-secondary {
+    background-color: #6c757d !important;
+    color: white !important;
+}
+
+.swal2-styled.btn-secondary:hover {
+    background-color: #5a6268 !important;
+    color: white !important;
+}
+
+.swal2-styled.btn-success {
+    background-color: var(--accent-color) !important;
+    color: white !important;
+}
+
+.swal2-styled.btn-success:hover {
+    background-color: var(--accent-hover) !important;
+    color: white !important;
+}
+
+/* SweetAlert2 進度條顏色 */
+.swal2-timer-progress-bar {
+    background-color: var(--primary-color) !important;
+}
+
+/* SweetAlert2 圖標顏色調整 */
+.swal2-icon.swal2-warning {
+    border-color: #ffc107 !important;
+    color: #ffc107 !important;
+}
+
+.swal2-icon.swal2-success {
+    border-color: var(--accent-color) !important;
+    color: var(--accent-color) !important;
+}
+
+.swal2-icon.swal2-error {
+    border-color: #dc3545 !important;
+    color: #dc3545 !important;
+}
+
+.swal2-icon.swal2-info {
+    border-color: var(--primary-color) !important;
+    color: var(--primary-color) !important;
+}
+
+/* 響應式設計 */
+@media (max-width: 768px) {
+    .swal-popup-custom {
+        margin: 1rem !important;
+        max-width: calc(100% - 2rem) !important;
+    }
+    
+    .swal-title-custom {
+        font-size: 1.3rem !important;
+    }
+    
+    .swal2-actions {
+        gap: 0.75rem !important;
+        margin-top: 1rem !important;
+        padding: 0 0.5rem !important;
+    }
+    
+    .swal2-styled.btn {
+        padding: 0.6rem 1.2rem !important;
+        font-size: 0.9rem !important;
+        min-width: 100px !important;
+        flex: 1 !important;
+        max-width: 150px !important;
+    }
+}
+
+@media (max-width: 480px) {
+    .swal2-actions {
+        flex-direction: column !important;
+        gap: 0.5rem !important;
+        width: 100% !important;
+    }
+    
+    .swal2-styled.btn {
+        width: 100% !important;
+        max-width: none !important;
+        flex: none !important;
+    }
+}

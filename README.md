@@ -304,6 +304,8 @@ curl -X POST http://localhost:5000/job/12345678-1234-5678-1234-567812345678/canc
 }
 ```
 
+**Note:** The web interface uses SweetAlert2 for enhanced user experience when cancelling tasks, providing beautiful confirmation dialogs and loading indicators.
+
 ## Updating the Application
 
 A management script `manage_service.sh` is provided to simplify common operations with the Docker service.
