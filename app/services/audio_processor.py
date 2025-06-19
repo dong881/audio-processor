@@ -1406,6 +1406,41 @@ class AudioProcessor:
         """檢查任務是否已被取消"""
         return job_id in self.cancelled_jobs
 
+    def cancel_job(self, job_id: str) -> Dict[str, Any]:
+        """取消指定的任務"""
+        with self.jobs_lock:
+            job = self.jobs.get(job_id)
+            
+        if not job:
+            # 詳細記錄所有現有任務ID用於調試
+            with self.jobs_lock:
+                existing_jobs = list(self.jobs.keys())
+            logging.error(f"任務 {job_id} 不存在。現有任務: {existing_jobs}")
+            return {'success': False, 'error': '任務不存在'}
+        
+        current_status = job['status']
+        logging.info(f"任務 {job_id} 當前狀態: {current_status}")
+        
+        if current_status in ['completed', 'failed', 'cancelled']:
+            return {'success': False, 'error': f'任務已{current_status}，無法取消'}
+        
+        # 標記任務為已取消
+        self.cancelled_jobs.add(job_id)
+        
+        # 嘗試取消正在執行的 Future
+        with self.jobs_lock:
+            if job_id in self.jobs and 'future' in self.jobs[job_id]:
+                future = self.jobs[job_id]['future']
+                if future and not future.done():
+                    cancelled = future.cancel()
+                    logging.info(f"Future取消結果: {cancelled}")
+        
+        # 直接更新任務狀態為已取消
+        self._handle_job_cancellation(job_id)
+        
+        logging.info(f"任務 {job_id} 已標記為取消")
+        return {'success': True, 'message': '任務已成功取消'}
+
     def _handle_job_cancellation(self, job_id: str):
         """處理任務取消"""
         with self.jobs_lock:
@@ -1414,29 +1449,12 @@ class AudioProcessor:
                 self.jobs[job_id]['progress'] = 100
                 self.jobs[job_id]['message'] = '任務已被使用者取消'
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
+                
+                # 確保移除 future 引用以避免內存洩漏
+                if 'future' in self.jobs[job_id]:
+                    del self.jobs[job_id]['future']
         
         logging.info(f"[Job {job_id}] 任務已取消")
-
-    def cancel_job(self, job_id: str) -> Dict[str, Any]:
-        """取消指定的任務"""
-        with self.jobs_lock:
-            job = self.jobs.get(job_id)
-            
-        if not job:
-            return {'success': False, 'error': '任務不存在'}
-        
-        if job['status'] in [JOB_STATUS['COMPLETED'], JOB_STATUS['FAILED']]:
-            return {'success': False, 'error': '任務已完成或失敗，無法取消'}
-        
-        # 標記任務為已取消
-        self.cancelled_jobs.add(job_id)
-        
-        # 如果任務還在等待中，直接更新狀態
-        if job['status'] == JOB_STATUS['PENDING']:
-            self._handle_job_cancellation(job_id)
-        
-        logging.info(f"任務 {job_id} 已標记為取消")
-        return {'success': True, 'message': '任務取消請求已提交'}
 
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
         """獲取工作狀態"""
@@ -1444,6 +1462,11 @@ class AudioProcessor:
             job = self.jobs.get(job_id)
             
         if not job:
+            # 詳細記錄調試信息
+            with self.jobs_lock:
+                existing_jobs = list(self.jobs.keys())
+                total_jobs = len(self.jobs)
+            logging.warning(f"查詢不存在的任務 {job_id}。目前共有 {total_jobs} 個任務: {existing_jobs[:5]}{'...' if total_jobs > 5 else ''}")
             return {'error': '工作不存在'}
         
         # 基本任務信息

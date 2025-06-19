@@ -293,11 +293,17 @@ def cancel_job_endpoint(job_id):
     try:
         logging.info(f"嘗試取消任務: {job_id}")
         
-        # 檢查任務是否存在
+        # 檢查任務是否存在，並記錄調試信息
         with processor.jobs_lock:
-            if job_id not in processor.jobs:
-                logging.warning(f"任務 {job_id} 不存在於 processor.jobs 中")
-                return jsonify({"success": False, "error": "任務不存在"}), 404
+            job_exists = job_id in processor.jobs
+            total_jobs = len(processor.jobs)
+            existing_jobs = list(processor.jobs.keys())
+            
+        logging.info(f"任務存在檢查: {job_exists}, 總任務數: {total_jobs}")
+        if not job_exists:
+            logging.warning(f"任務 {job_id} 不存在於 processor.jobs 中")
+            logging.debug(f"現有任務ID (前5個): {existing_jobs[:5]}")
+            return jsonify({"success": False, "error": "任務不存在"}), 404
         
         # 嘗試取消任務
         result = processor.cancel_job(job_id)
@@ -370,4 +376,29 @@ def get_job_result_endpoint(job_id):
         
     except Exception as e:
         logging.error(f"獲取任務結果 API 錯誤 for job {job_id}: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+
+@api_bp.route('/jobs/debug', methods=['GET'])
+def debug_jobs_endpoint():
+    """調試端點：列出所有任務ID (僅用於開發階段)"""
+    try:
+        with processor.jobs_lock:
+            jobs_info = {
+                job_id: {
+                    'status': job['status'],
+                    'progress': job['progress'],
+                    'created_at': job['created_at'],
+                    'updated_at': job['updated_at']
+                }
+                for job_id, job in processor.jobs.items()
+            }
+            
+        return jsonify({
+            "success": True,
+            "total_jobs": len(jobs_info),
+            "jobs": jobs_info
+        })
+        
+    except Exception as e:
+        logging.error(f"調試端點錯誤: {e}", exc_info=True)
         return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500

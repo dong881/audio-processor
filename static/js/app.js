@@ -1834,24 +1834,31 @@ function updateTaskElementUI(taskId, task) {
 // ===== 任務操作函數 =====
 
 /**
- * 取消任務
+ * 取消任務 - 修復API路徑並添加調試信息
  */
 async function cancelTask(taskId) {
     if (!confirm('確定要取消這個任務嗎？')) {
         return;
     }
     
+    console.log(`嘗試取消任務: ${taskId}`);
+    console.log(`當前本地任務狀態:`, taskManager.tasks[taskId]);
+    
     try {
         const response = await fetch(`${API_BASE_URL}/api/job/${taskId}/cancel`, {
             method: 'POST'
         });
         
+        console.log(`取消任務響應狀態: ${response.status}`);
+        
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
+            console.error(`取消任務失敗，錯誤數據:`, errorData);
             throw new Error(`HTTP ${response.status}: ${errorData.error || '取消任務失敗'}`);
         }
         
         const data = await response.json();
+        console.log(`取消任務響應數據:`, data);
         
         if (data.success) {
             // 更新本地任務狀態
@@ -1864,6 +1871,8 @@ async function cancelTask(taskId) {
                 updateTaskCounts();
                 filterTasks();
                 saveCurrentTasks();
+                
+                console.log(`本地任務狀態已更新為已取消`);
             }
             
             showSuccess('任務已成功取消');
@@ -1944,3 +1953,18 @@ function displayTaskResult(task, result) {
         elements.resultContainer.scrollIntoView({ behavior: 'smooth' });
     }
 }
+
+// 添加調試函數
+async function debugJobsStatus() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/jobs/debug`);
+        const data = await response.json();
+        console.log('伺服器端任務狀態:', data);
+        return data;
+    } catch (error) {
+        console.error('獲取調試信息失敗:', error);
+    }
+}
+
+// 在開發者控制台中可以調用這個函數來查看任務狀態
+window.debugJobsStatus = debugJobsStatus;
