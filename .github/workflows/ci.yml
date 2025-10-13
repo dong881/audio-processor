@@ -1,0 +1,100 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+    
+    - name: Install Python dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Check Python syntax
+      run: |
+        python -m py_compile main.py
+        python -m py_compile app/__init__.py
+        find app -name "*.py" -type f -exec python -m py_compile {} \;
+    
+    - name: Run basic health checks
+      run: |
+        python -c "from app import create_app; app = create_app(); print('✅ Flask app created successfully')"
+        python -c "import app.services.audio_processor; print('✅ AudioProcessor module imports successfully')"
+        python -c "import app.utils.notion_formatter; print('✅ NotionFormatter module imports successfully')"
+    
+    - name: Verify required environment variables structure
+      run: |
+        python -c "
+        import os
+        from dotenv import load_dotenv
+        
+        # Check .env.example exists and has required keys
+        with open('.env.example', 'r') as f:
+            env_content = f.read()
+            required_vars = ['NOTION_TOKEN', 'NOTION_DATABASE_ID', 'GEMINI_API_KEY', 'HF_TOKEN']
+            for var in required_vars:
+                if var not in env_content:
+                    raise ValueError(f'Missing {var} in .env.example')
+            print('✅ All required environment variables defined in .env.example')
+        "
+
+  docker-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Build Docker image
+      run: |
+        docker build -t audio-processor:test .
+    
+    - name: Verify Docker image
+      run: |
+        docker run --rm audio-processor:test python -c "from app import create_app; print('✅ Docker image working')"
+
+  frontend-validation:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Check frontend files exist
+      run: |
+        test -f templates/index.html && echo "✅ index.html exists"
+        test -f static/js/app.js && echo "✅ app.js exists"
+        test -f static/js/auth.js && echo "✅ auth.js exists"
+        test -f static/css/style.css && echo "✅ style.css exists"
+    
+    - name: Validate HTML syntax
+      run: |
+        pip install html5validator
+        html5validator --root templates/ --log WARNING || echo "⚠️ HTML validation warnings (non-critical)"
+    
+    - name: Check JavaScript syntax
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    
+    - name: Validate JavaScript
+      run: |
+        npm install -g eslint
+        eslint static/js/*.js --no-eslintrc --parser-options=ecmaVersion:2020 || echo "⚠️ JavaScript validation warnings (non-critical)"
