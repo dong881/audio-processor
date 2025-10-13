@@ -8,13 +8,11 @@ from app.utils.constants import JOB_STATUS
 # 建立藍圖
 api_bp = Blueprint('api', __name__)
 
-# 假設我們在此處獲取processor實例
-# 實際應用中會在main.py中初始化並導入
-from main import processor
-
 @api_bp.route('/health', methods=['GET'])
 def health_check():
     """健康檢查端點"""
+    from main import processor
+    
     # Create a consistent snapshot of jobs while holding the lock
     with processor.jobs_lock:
         # Create a full copy of the jobs dictionary to ensure a consistent snapshot
@@ -36,6 +34,8 @@ def health_check():
 @api_bp.route('/process', methods=['POST'])
 def process_audio_endpoint():
     """非同步處理音檔的 API 端點，立即返回工作 ID"""
+    from main import processor
+    
     try:
         data = request.get_json()
 
@@ -78,6 +78,8 @@ def process_audio_endpoint():
 @api_bp.route('/job/<job_id>', methods=['GET'])
 def get_job_status_endpoint(job_id):
     """獲取工作狀態的 API 端點"""
+    from main import processor
+    
     try:
         logging.debug(f"Getting job status for job_id: {job_id}")
         job_status = processor.get_job_status(job_id)
@@ -102,6 +104,8 @@ def get_job_status_endpoint(job_id):
 @api_bp.route('/jobs', methods=['GET'])
 def get_active_jobs_endpoint():
     """獲取工作列表的 API 端點，可選擇性過濾狀態"""
+    from main import processor
+    
     try:
         # Get filter status from query parameter, default to show only active jobs
         filter_status = request.args.get('filter', 'active')
@@ -187,6 +191,8 @@ def get_active_jobs_endpoint():
 @api_bp.route('/drive/files')
 def drive_files():
     """獲取Google Drive檔案列表"""
+    from main import processor
+    
     if not session.get('authenticated', False):
         return jsonify({'success': False, 'error': 'Not authenticated'}), 401
 
@@ -290,6 +296,8 @@ def drive_files():
 @api_bp.route('/job/<job_id>/cancel', methods=['POST'])
 def cancel_job_endpoint(job_id):
     """取消指定任務的 API 端點"""
+    from main import processor
+    
     try:
         logging.info(f"嘗試取消任務: {job_id}")
         
@@ -322,6 +330,8 @@ def cancel_job_endpoint(job_id):
 @api_bp.route('/jobs/status/batch', methods=['POST'])
 def get_batch_job_status_endpoint():
     """批量獲取任務狀態的 API 端點"""
+    from main import processor
+    
     try:
         data = request.get_json()
         if not data or 'job_ids' not in data:
@@ -350,6 +360,8 @@ def get_batch_job_status_endpoint():
 @api_bp.route('/jobs/<job_id>/result', methods=['GET'])
 def get_job_result_endpoint(job_id):
     """獲取任務結果的 API 端點"""
+    from main import processor
+    
     try:
         logging.debug(f"Getting job result for job_id: {job_id}")
         job_status = processor.get_job_status(job_id)
@@ -381,6 +393,8 @@ def get_job_result_endpoint(job_id):
 @api_bp.route('/jobs/debug', methods=['GET'])
 def debug_jobs_endpoint():
     """調試端點：列出所有任務ID (僅用於開發階段)"""
+    from main import processor
+    
     try:
         with processor.jobs_lock:
             jobs_info = {
