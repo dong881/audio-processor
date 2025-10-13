@@ -19,6 +19,7 @@ This Flask application processes audio files from Google Drive, performs speech-
 *   **NEW**: Timestamped transcript entries in Notion output.
 *   **NEW**: Google Drive links included in the Notion page.
 *   **NEW**: Job status tracking and progress monitoring APIs.
+*   **NEW**: CI/CD pipeline with GitHub Actions for automated testing and validation.
 *   **Intelligent File Management**: Automatically renames processed audio files in Google Drive using a standardized format `[YYYY-MM-DD] Title.m4a` where the date is extracted from the original filename or defaults to the current date, and the title is generated from AI analysis.
 
 ## Documentation
@@ -87,7 +88,7 @@ For a detailed step-by-step explanation of the application's internal workflow a
 
     # Notion API
     NOTION_TOKEN=YOUR_NOTION_INTEGRATION_TOKEN
-    NOTION_DATABASE_ID=YOUR_NOTION_DATABASE_ID
+    NOTION_DATABASE_ID=1ea100983143803da79ef7dc3f8fdd5d
 
     # Flask Settings (Optional)
     PORT=5000
@@ -361,6 +362,51 @@ If you prefer not to use the script, you can manually update the application whe
 5. View logs: `docker-compose logs -f audio-processor`
 
 This explicit step-by-step process avoids potential issues with some Docker Compose versions (particularly 1.x) that can cause errors like `KeyError: 'ContainerConfig'` when using simpler commands like `docker-compose up -d --build`.
+
+## CI/CD Pipeline
+
+The project includes a GitHub Actions CI/CD pipeline that automatically validates code quality and functionality on every push and pull request.
+
+### What's Tested
+
+The CI/CD pipeline runs three main jobs:
+
+1. **Python Tests**
+   - Validates Python syntax for all modules
+   - Checks that Flask app can be created successfully
+   - Verifies all core modules import correctly
+   - Validates environment variable configuration
+
+2. **Docker Build**
+   - Builds the Docker image
+   - Verifies the image runs correctly
+
+3. **Frontend Validation**
+   - Checks that all required frontend files exist
+   - Validates HTML syntax
+   - Validates JavaScript syntax
+
+### Running CI Checks Locally
+
+You can run similar checks locally before pushing:
+
+```bash
+# Check Python syntax
+python -m py_compile main.py
+find app -name "*.py" -type f -exec python -m py_compile {} \;
+
+# Test Flask app creation
+python -c "from app import create_app; app = create_app(); print('✅ Flask app created successfully')"
+
+# Build Docker image
+docker build -t audio-processor:test .
+```
+
+### CI/CD Configuration
+
+The workflow is defined in `.github/workflows/ci.yml` and runs on:
+- Pushes to `main` and `develop` branches
+- Pull requests to `main` and `develop` branches
 
 ### Quick Update Command
 

@@ -44,9 +44,6 @@ jobs:
     - name: Verify required environment variables structure
       run: |
         python -c "
-        import os
-        from dotenv import load_dotenv
-        
         # Check .env.example exists and has required keys
         with open('.env.example', 'r') as f:
             env_content = f.read()
