@@ -166,50 +166,53 @@ class TaskPersistenceManager {
 // 初始化任務持久化管理器
 const taskPersistence = new TaskPersistenceManager();
 
-// DOM 元素快取
-const elements = {
-    // 主UI元素
-    fileList: document.getElementById('file-list'),
-    attachmentList: document.getElementById('attachment-list'),
-    progressContainer: document.getElementById('progress-container'),
-    processingBar: document.getElementById('processing-bar'),
-    processingStatus: document.getElementById('processing-status'),
-    resultContainer: document.getElementById('result-container'),
-    authSection: document.getElementById('auth-section'),
-    processingSection: document.getElementById('processing-section'),
-    // 支援多個登入按鈕元素 (同時支援 login-button 和 login-btn)
-    loginButtons: [
-        document.getElementById('login-button'),
-        document.getElementById('login-btn')
-    ].filter(Boolean), // 過濾掉不存在的元素
-    logoutButton: document.getElementById('logout-button'),
-
-    // 操作按鈕
-    refreshFilesBtn: document.getElementById('refresh-files-btn'),
-    
-    // 結果顯示區
-    jobsList: document.getElementById('jobs-list'),
-    resultTitle: document.getElementById('result-title'),
-    resultSummary: document.getElementById('result-summary'),
-    resultTodos: document.getElementById('result-todos'),
-    resultLink: document.getElementById('result-link'),
-    resultSpeakers: document.getElementById('result-speakers'),
-    
-    // 進度指示
-    progressPercentage: document.getElementById('progress-percentage'),
-    
-    // Task Manager 元素
-    createTaskBtn: document.getElementById('create-task-btn'),
-    refreshTasksBtn: document.getElementById('refresh-tasks-btn'),
-    toggleTaskManagerBtn: document.getElementById('toggle-task-manager-btn'),
-    taskManagerContent: document.getElementById('task-manager-content'),
-    tasksContainer: document.getElementById('tasks-container'),
-    activeTasksCount: document.getElementById('active-tasks-count'),
-    taskFilterButtons: document.querySelectorAll('input[name="task-filter"]'),
-};
+// DOM 元素快取 - 將在 DOMContentLoaded 後初始化
+let elements = {};
 
 // 初始化頁面
 document.addEventListener('DOMContentLoaded', () => {
+    // 初始化 DOM 元素快取
+    elements = {
+        // 主UI元素
+        fileList: document.getElementById('file-list'),
+        attachmentList: document.getElementById('attachment-list'),
+        progressContainer: document.getElementById('progress-container'),
+        processingBar: document.getElementById('processing-bar'),
+        processingStatus: document.getElementById('processing-status'),
+        resultContainer: document.getElementById('result-container'),
+        authSection: document.getElementById('auth-section'),
+        processingSection: document.getElementById('processing-section'),
+        // 支援多個登入按鈕元素 (同時支援 login-button 和 login-btn)
+        loginButtons: [
+            document.getElementById('login-button'),
+            document.getElementById('login-btn')
+        ].filter(Boolean), // 過濾掉不存在的元素
+        logoutButton: document.getElementById('logout-button'),
+
+        // 操作按鈕
+        refreshFilesBtn: document.getElementById('refresh-files-btn'),
+        
+        // 結果顯示區
+        jobsList: document.getElementById('jobs-list'),
+        resultTitle: document.getElementById('result-title'),
+        resultSummary: document.getElementById('result-summary'),
+        resultTodos: document.getElementById('result-todos'),
+        resultLink: document.getElementById('result-link'),
+        resultSpeakers: document.getElementById('result-speakers'),
+        
+        // 進度指示
+        progressPercentage: document.getElementById('progress-percentage'),
+        
+        // Task Manager 元素
+        createTaskBtn: document.getElementById('create-task-btn'),
+        refreshTasksBtn: document.getElementById('refresh-tasks-btn'),
+        toggleTaskManagerBtn: document.getElementById('toggle-task-manager-btn'),
+        taskManagerContent: document.getElementById('task-manager-content'),
+        tasksContainer: document.getElementById('tasks-container'),
+        activeTasksCount: document.getElementById('active-tasks-count'),
+        taskFilterButtons: document.querySelectorAll('input[name="task-filter"]'),
+    };
+    
     initApp();
     setupEventListeners();
 });
