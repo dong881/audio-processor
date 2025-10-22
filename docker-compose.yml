@@ -1,34 +1,17 @@
 services:
-  redis:
-    image: "redis:alpine"
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes --appendfsync everysec
-    restart: unless-stopped
-
   audio-processor:
     build: .
     ports:
       - "5000:5000"
     environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
       - PORT=5000
       - FLASK_DEBUG=false
-      # Redirect cache directories to a writable location within the container
+      # Cache directories
       - HF_HOME=/app/.cache/huggingface
       - TORCH_HOME=/app/.cache/torch
       - PYANNOTE_CACHE=/app/.cache/pyannote
-      # OAuth and credentials configuration - 明確設置容器內的路徑，避免路徑轉換
+      # Credentials path
       - GOOGLE_SA_JSON_PATH=/app/credentials/service-account.json
-      - GOOGLE_CLIENT_SECRET_PATH=/app/credentials/client_secret.json
-      - EXTERNAL_URL=http://localhost:5000
-      - OAUTHLIB_INSECURE_TRANSPORT=1  # 允許在非HTTPS下進行OAuth (開發環境使用)
-      - OAUTHLIB_RELAX_TOKEN_SCOPE=1   # 放寬令牌作用域檢查
-      # Optional: Set home directory explicitly for other potential needs
-      - HOME=/home/appuser
     env_file:
       - .env
     volumes:
@@ -36,12 +19,8 @@ services:
       - ./credentials:/app/credentials:ro
       - model_cache:/app/.cache
       - pip_cache:/root/.cache/pip
-    depends_on:
-      - redis
     restart: unless-stopped
 
 volumes:
   pip_cache:
   model_cache:
-  redis_data:
-    driver: local
