@@ -416,3 +416,115 @@ def debug_jobs_endpoint():
     except Exception as e:
         logging.error(f"調試端點錯誤: {e}", exc_info=True)
         return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+
+@api_bp.route('/meeting-minutes/template', methods=['POST'])
+def generate_meeting_minutes_template():
+    """生成會議紀錄模板的 API 端點"""
+    from app.services.meeting_minutes_generator import MeetingMinutesGenerator
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "無效的請求內容"}), 400
+        
+        generator = MeetingMinutesGenerator()
+        
+        # 提取參數
+        meeting_title = data.get('meeting_title', '[Meeting Title]')
+        date = data.get('date')
+        start_time = data.get('start_time', 'HH:MM')
+        end_time = data.get('end_time', 'HH:MM')
+        attendees = data.get('attendees')
+        agenda_items = data.get('agenda_items')
+        status = data.get('status', 'Draft agenda')
+        custom_notes = data.get('custom_notes', '')
+        variant = data.get('variant', 'standard')
+        
+        # 生成模板
+        if variant == 'standard':
+            template = generator.generate_template(
+                meeting_title=meeting_title,
+                date=date,
+                start_time=start_time,
+                end_time=end_time,
+                attendees=attendees,
+                agenda_items=agenda_items,
+                status=status,
+                custom_notes=custom_notes
+            )
+        else:
+            template = generator.generate_variant_template(
+                variant=variant,
+                meeting_title=meeting_title,
+                date=date,
+                start_time=start_time,
+                end_time=end_time,
+                attendees=attendees,
+                agenda_items=agenda_items,
+                status=status,
+                custom_notes=custom_notes
+            )
+        
+        return jsonify({
+            "success": True,
+            "template": template,
+            "variant": variant
+        })
+        
+    except Exception as e:
+        logging.error(f"生成會議紀錄模板 API 錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+
+@api_bp.route('/meeting-minutes/template/from-audio', methods=['POST'])
+def generate_template_from_audio():
+    """從音頻檔案元數據生成會議紀錄模板的 API 端點"""
+    from app.services.meeting_minutes_generator import MeetingMinutesGenerator
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "無效的請求內容"}), 400
+        
+        audio_metadata = data.get('audio_metadata')
+        if not audio_metadata:
+            return jsonify({"success": False, "error": "缺少音頻元數據"}), 400
+        
+        generator = MeetingMinutesGenerator()
+        
+        # 提取可選參數
+        custom_attendees = data.get('custom_attendees')
+        custom_agenda = data.get('custom_agenda')
+        
+        # 生成模板
+        template = generator.generate_from_audio_metadata(
+            audio_metadata=audio_metadata,
+            custom_attendees=custom_attendees,
+            custom_agenda=custom_agenda
+        )
+        
+        return jsonify({
+            "success": True,
+            "template": template
+        })
+        
+    except Exception as e:
+        logging.error(f"從音頻生成會議紀錄模板 API 錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+
+@api_bp.route('/meeting-minutes/template/variants', methods=['GET'])
+def get_template_variants():
+    """獲取可用的會議紀錄模板變體"""
+    from app.services.meeting_minutes_generator import MeetingMinutesGenerator
+    
+    try:
+        generator = MeetingMinutesGenerator()
+        variants = generator.get_template_variants()
+        
+        return jsonify({
+            "success": True,
+            "variants": variants
+        })
+        
+    except Exception as e:
+        logging.error(f"獲取模板變體 API 錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
