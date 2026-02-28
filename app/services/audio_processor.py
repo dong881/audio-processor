@@ -156,6 +156,11 @@ class AudioProcessor:
             self.oauth_drive_service = None
             return False
 
+    def clear_credentials(self):
+        """清除OAuth憑證"""
+        self.oauth_drive_service = None
+        logging.info("🔄 OAuth Drive 服務憑證已清除")
+
     def download_file(self, file_id: str, target_dir: str) -> str: # Returns filename
         """從 Google Drive 下載檔案到指定的目標目錄 (使用服務帳號)"""
         logging.info(f"🔄 從 Google Drive 下載檔案 (ID: {file_id}) 到目錄 {target_dir}")

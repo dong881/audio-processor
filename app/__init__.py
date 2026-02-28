@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Flask, session, request
+from flask import Flask, session, request, Response
 from dotenv import load_dotenv
 
 from app.services.credential_manager import CredentialManager
@@ -22,16 +22,26 @@ def create_app():
         secret_key = os.urandom(32).hex()
     app.secret_key = secret_key
     
-    # *** 新增：初始化憑證管理器 ***
+    # 初始化憑證管理器
     credential_manager = CredentialManager()
+    
+    @app.after_request
+    def add_security_headers(response: Response) -> Response:
+        """為所有回應添加安全標頭"""
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+        response.headers['X-XSS-Protection'] = '1; mode=block'
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        return response
     
     @app.before_request
     def restore_credentials():
         """在每個請求前嘗試恢復憑證"""
-        # 跳過靜態文件和特定路由
+        # 跳過靜態文件、健康檢查和特定路由
         if (request.endpoint and 
             (request.endpoint.startswith('static') or 
-             request.endpoint in ['auth.login', 'auth.auth_google', 'auth.auth_callback'])):
+             request.endpoint in ['auth.login', 'auth.auth_google', 'auth.auth_callback',
+                                  'api.health_check'])):
             return
             
         # 如果已經有 session 認證，不需要恢復

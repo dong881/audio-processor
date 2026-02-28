@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.9'
         cache: 'pip'
@@ -41,13 +41,50 @@ jobs:
         python -c "import app.services.audio_processor; print('✅ AudioProcessor module imports successfully')"
         python -c "import app.utils.notion_formatter; print('✅ NotionFormatter module imports successfully')"
     
+    - name: Verify constants module
+      run: |
+        python -c "
+        from app.utils.constants import JobStatus, JOB_STATUS
+        from app.utils.constants import MAX_BLOCKS_PER_REQUEST, MAX_RETRIES, DEFAULT_GEMINI_MODELS
+        assert JobStatus.COMPLETED == 'completed'
+        assert JOB_STATUS['COMPLETED'] == 'completed'
+        assert MAX_BLOCKS_PER_REQUEST == 90
+        assert MAX_RETRIES == 3
+        assert len(DEFAULT_GEMINI_MODELS) > 0
+        print('✅ Constants module verified successfully')
+        "
+    
+    - name: Verify NotionFormatter
+      run: |
+        python -c "
+        from app.utils.notion_formatter import NotionFormatter
+        nf = NotionFormatter()
+        # Test basic markdown parsing
+        blocks = nf.process_note_format_for_notion('# Title\n\nParagraph text')
+        assert len(blocks) >= 2
+        assert blocks[0]['type'] == 'heading_1'
+        # Test inline formatting
+        segments = nf.process_inline_formatting('**bold** and *italic*')
+        assert any(s.get('annotations', {}).get('bold') for s in segments)
+        # Test table building
+        table = nf._build_table_block([['A', 'B'], ['1', '2']])
+        assert table['type'] == 'table'
+        assert table['table']['table_width'] == 2
+        # Test transcript splitting
+        blocks = nf.split_transcript_into_blocks('Line 1\nLine 2\nLine 3')
+        assert len(blocks) >= 1
+        print('✅ NotionFormatter verified successfully')
+        "
+
     - name: Verify required environment variables structure
       run: |
         python -c "
         # Check .env.example exists and has required keys
         with open('.env.example', 'r') as f:
             env_content = f.read()
-            required_vars = ['NOTION_TOKEN', 'NOTION_DATABASE_ID', 'GEMINI_API_KEY', 'HF_TOKEN']
+            required_vars = ['NOTION_TOKEN', 'NOTION_DATABASE_ID', 'GEMINI_API_KEY', 'HF_TOKEN',
+                           'FLASK_SECRET_KEY', 'REDIS_HOST', 'REDIS_PORT', 'REDIS_DB',
+                           'EXTERNAL_URL', 'GOOGLE_CLIENT_SECRET_PATH']
             for var in required_vars:
                 if var not in env_content:
                     raise ValueError(f'Missing {var} in .env.example')
@@ -58,7 +95,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     
     - name: Build Docker image
       run: |
@@ -72,7 +109,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     
     - name: Check frontend files exist
       run: |
@@ -87,7 +124,7 @@ jobs:
         html5validator --root templates/ --log WARNING || echo "⚠️ HTML validation warnings (non-critical)"
     
     - name: Check JavaScript syntax
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: '18'
     
