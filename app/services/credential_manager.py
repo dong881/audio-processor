@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import redis
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from google.oauth2.credentials import Credentials
 import google.auth.transport.requests
 from typing import Optional, Dict, Any
@@ -172,7 +172,7 @@ class CredentialManager:
         # 如果憑證過期或即將過期（5分鐘內），嘗試刷新
         if credentials.expired or (
             credentials.expiry and 
-            credentials.expiry < datetime.utcnow() + timedelta(minutes=5)
+            credentials.expiry < datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=5)
         ):
             credentials = self.refresh_credentials(user_id, credentials)
         
