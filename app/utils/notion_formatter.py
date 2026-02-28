@@ -165,10 +165,15 @@ class NotionFormatter:
                     }
                 })
                 
-            # 處理待辦事項 ([ ] 或 [x])
-            elif line.startswith('[ ]') or line.startswith('[x]') or line.startswith('[X]'):
-                checked = line.startswith('[x]') or line.startswith('[X]')
-                content = line[3:].strip()
+            # 處理待辦事項 ([ ] 或 [x] 或 - [ ] 或 - [x])
+            elif line.startswith('[ ]') or line.startswith('[x]') or line.startswith('[X]') or \
+                 line.startswith('- [ ]') or line.startswith('- [x]') or line.startswith('- [X]'):
+                if line.startswith('- '):
+                    checkbox_part = line[2:]
+                else:
+                    checkbox_part = line
+                checked = checkbox_part.startswith('[x]') or checkbox_part.startswith('[X]')
+                content = checkbox_part[3:].strip()
                 # 應用行內格式化處理
                 rich_text_content = self.process_inline_formatting(content)
                 

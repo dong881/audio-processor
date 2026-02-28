@@ -73,7 +73,7 @@ def process_audio_endpoint():
 
     except Exception as e:
         logging.error(f"API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/job/<job_id>', methods=['GET'])
 def get_job_status_endpoint(job_id):
@@ -99,7 +99,7 @@ def get_job_status_endpoint(job_id):
         
     except Exception as e:
         logging.error(f"API 錯誤 for job {job_id}: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/jobs', methods=['GET'])
 def get_active_jobs_endpoint():
@@ -186,7 +186,7 @@ def get_active_jobs_endpoint():
         
     except Exception as e:
         logging.error(f"API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/drive/files')
 def drive_files():
@@ -325,7 +325,7 @@ def cancel_job_endpoint(job_id):
         
     except Exception as e:
         logging.error(f"取消任務 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {str(e)}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/jobs/status/batch', methods=['POST'])
 def get_batch_job_status_endpoint():
@@ -340,6 +340,8 @@ def get_batch_job_status_endpoint():
         job_ids = data['job_ids']
         if not isinstance(job_ids, list):
             return jsonify({"success": False, "error": "job_ids 必須是陣列"}), 400
+        if len(job_ids) > 100:
+            return jsonify({"success": False, "error": "job_ids 數量不能超過 100"}), 400
         
         # 批量獲取任務狀態
         jobs_status = {}
@@ -355,7 +357,7 @@ def get_batch_job_status_endpoint():
         
     except Exception as e:
         logging.error(f"批量獲取任務狀態 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/jobs/<job_id>/result', methods=['GET'])
 def get_job_result_endpoint(job_id):
@@ -388,7 +390,7 @@ def get_job_result_endpoint(job_id):
         
     except Exception as e:
         logging.error(f"獲取任務結果 API 錯誤 for job {job_id}: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/jobs/debug', methods=['GET'])
 def debug_jobs_endpoint():
@@ -415,7 +417,7 @@ def debug_jobs_endpoint():
         
     except Exception as e:
         logging.error(f"調試端點錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/meeting-minutes/template', methods=['POST'])
 def generate_meeting_minutes_template():
@@ -473,7 +475,7 @@ def generate_meeting_minutes_template():
         
     except Exception as e:
         logging.error(f"生成會議紀錄模板 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/meeting-minutes/template/from-audio', methods=['POST'])
 def generate_template_from_audio():
@@ -509,7 +511,7 @@ def generate_template_from_audio():
         
     except Exception as e:
         logging.error(f"從音頻生成會議紀錄模板 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/meeting-minutes/template/variants', methods=['GET'])
 def get_template_variants():
@@ -527,4 +529,4 @@ def get_template_variants():
         
     except Exception as e:
         logging.error(f"獲取模板變體 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500

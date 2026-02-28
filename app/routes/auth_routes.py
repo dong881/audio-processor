@@ -1,13 +1,13 @@
 import os
 import logging
 import json
+from datetime import datetime
 from flask import Blueprint, request, jsonify, redirect, session, url_for
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 import google.auth.transport.requests
 from google.oauth2 import id_token
 import google.oauth2.credentials
-import google_auth_oauthlib.flow
 import googleapiclient.discovery
 from app.services.credential_manager import CredentialManager
 
@@ -66,10 +66,8 @@ def auth_google():
                 redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
                 logging.info(f"使用環境變數設定的外部URL: {redirect_uri}")
             else:
-                # 如果正在使用Docker內部地址且EXTERNAL_URL未設定，則使用預期的外部地址
-                # 這應該與 client_secret.json 和 Google Cloud Console 中的 URI 之一匹配。
-                redirect_uri = "https://audio-processor.ddns.net/api/auth/callback"
-                logging.info(f"使用硬編碼的預期外部URL: {redirect_uri}")
+                # EXTERNAL_URL 未設定，保持使用原始 redirect_uri
+                logging.warning("⚠️ EXTERNAL_URL 環境變數未設定，OAuth 可能無法正常運作")
             
         logging.info(f"🔄 OAuth 重定向 URI: {redirect_uri}")
         
@@ -192,9 +190,9 @@ def auth_callback():
                     redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
                     logging.info(f"回調中：使用環境變數EXTERNAL_URL設定的重定向URI: {redirect_uri}")
                 else:
-                    # 如果EXTERNAL_URL未設定，且是本地請求，則預設為預期的公開URI
-                    redirect_uri = "https://audio-processor.ddns.net/api/auth/callback"
-                    logging.info(f"回調中：使用硬編碼的預期外部URL: {redirect_uri}")
+                    # EXTERNAL_URL 未設定，保持使用原始 redirect_uri
+                    redirect_uri = base_redirect_uri
+                    logging.warning("⚠️ 回調中：EXTERNAL_URL 環境變數未設定")
             else:
                 # 如果不是本地請求，則直接使用基於請求的URL
                 redirect_uri = base_redirect_uri
@@ -321,7 +319,17 @@ def auth_callback():
                     credential_manager.extend_credential_expiry(user_id, 60)
                 else:
                     logging.warning("⚠️ 憑證保存到 Redis 失敗，但認證仍然有效")
-                        
+            
+            # *** 設置 OAuth 憑證到 AudioProcessor ***
+            try:
+                if processor is not None:
+                    if processor.set_oauth_credentials(credentials):
+                        logging.info("✅ 已成功將OAuth憑證設置到AudioProcessor")
+                    else:
+                        logging.warning("⚠️ 設置OAuth憑證到AudioProcessor失敗")
+            except Exception as proc_err:
+                logging.warning(f"⚠️ 設置AudioProcessor憑證時發生錯誤: {proc_err}")
+                    
             return redirect('/')
 
         except google.auth.exceptions.RefreshError as re:
