@@ -264,7 +264,7 @@ class AudioProcessor:
         names = folder_path.strip('/').split('/')
         parent_id = 'root'
         for name in names:
-            safe_name = name.replace("\\", "\\\\").replace("'", "\\'")
+            safe_name = name.replace("'", "\\'")
             results = self.oauth_drive_service.files().list(
                 q=f"trashed = false and mimeType = 'application/vnd.google-apps.folder' and name = '{safe_name}' and '{parent_id}' in parents",
                 spaces='drive',

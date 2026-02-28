@@ -39,7 +39,12 @@ def _build_redirect_uri():
         if external_url:
             redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
         else:
-            redirect_uri = os.getenv("DEFAULT_REDIRECT_URI", "https://audio-processor.ddns.net/api/auth/callback")
+            default_uri = os.getenv("DEFAULT_REDIRECT_URI")
+            if default_uri:
+                redirect_uri = default_uri
+            else:
+                logging.warning("⚠️ EXTERNAL_URL 和 DEFAULT_REDIRECT_URI 均未設定，建議在環境變數中配置")
+                redirect_uri = "https://audio-processor.ddns.net/api/auth/callback"
     return redirect_uri
 
 @auth_bp.route('/login')
