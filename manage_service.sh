@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Script to manage the audio-processor service
 

@@ -1,9 +1,7 @@
 import os
-import sys
 import tempfile
 import shutil
 import subprocess
-import io
 import json
 import re
 import time
@@ -24,9 +22,6 @@ from googleapiclient.http import MediaIoBaseDownload
 # 語音處理相關
 import whisper
 from pyannote.audio import Pipeline
-import numpy as np
-import soundfile as sf
-import librosa
 
 # LLM API 相關
 import google.generativeai as genai

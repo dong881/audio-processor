@@ -1,8 +1,7 @@
-import os
 import uuid
 import logging
 from datetime import datetime
-from flask import Blueprint, request, jsonify, session, current_app
+from flask import Blueprint, request, jsonify, session
 from app.utils.constants import JOB_STATUS
 
 # 建立藍圖
