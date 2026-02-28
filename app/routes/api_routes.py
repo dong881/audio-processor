@@ -1,17 +1,29 @@
-import os
 import uuid
 import logging
 from datetime import datetime
-from flask import Blueprint, request, jsonify, session, current_app
+from flask import Blueprint, request, jsonify, session
 from app.utils.constants import JOB_STATUS
 
 # 建立藍圖
 api_bp = Blueprint('api', __name__)
 
+MAX_BATCH_JOB_IDS = 100
+
+def _is_valid_uuid(value: str) -> bool:
+    """驗證字串是否為有效的 UUID 格式"""
+    try:
+        uuid.UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
+
 @api_bp.route('/health', methods=['GET'])
 def health_check():
     """健康檢查端點"""
     from main import processor
+    
+    if processor is None:
+        return jsonify({"status": "unhealthy", "error": "Processor not initialized"}), 503
     
     # Create a consistent snapshot of jobs while holding the lock
     with processor.jobs_lock:
@@ -35,6 +47,9 @@ def health_check():
 def process_audio_endpoint():
     """非同步處理音檔的 API 端點，立即返回工作 ID"""
     from main import processor
+    
+    if processor is None:
+        return jsonify({"success": False, "error": "服務未就緒"}), 503
     
     try:
         data = request.get_json()
@@ -73,12 +88,15 @@ def process_audio_endpoint():
 
     except Exception as e:
         logging.error(f"API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/job/<job_id>', methods=['GET'])
 def get_job_status_endpoint(job_id):
     """獲取工作狀態的 API 端點"""
     from main import processor
+    
+    if not _is_valid_uuid(job_id):
+        return jsonify({"success": False, "error": "無效的任務 ID 格式"}), 400
     
     try:
         logging.debug(f"Getting job status for job_id: {job_id}")
@@ -99,7 +117,7 @@ def get_job_status_endpoint(job_id):
         
     except Exception as e:
         logging.error(f"API 錯誤 for job {job_id}: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/jobs', methods=['GET'])
 def get_active_jobs_endpoint():
@@ -115,61 +133,39 @@ def get_active_jobs_endpoint():
             # First create a snapshot of all jobs while holding the lock
             all_jobs = {job_id: job.copy() for job_id, job in processor.jobs.items()}
         
-        # Process the jobs data outside the lock to minimize lock contention
-        if filter_status == 'all':
-            # Return all jobs regardless of status
-            jobs_to_return = {
-                job_id: {
-                    'id': job['id'],
-                    'status': job['status'],
-                    'progress': job['progress'],
-                    'created_at': job['created_at'],
-                    'updated_at': job['updated_at']
-                }
-                for job_id, job in all_jobs.items()
+        # Define status filter map
+        status_filters = {
+            'all': None,
+            'active': [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']],
+            'completed': [JOB_STATUS['COMPLETED']],
+            'failed': [JOB_STATUS['FAILED']],
+        }
+        
+        if filter_status not in status_filters:
+            return jsonify({"success": False, "error": "Invalid filter parameter. Use 'active', 'all', 'completed', or 'failed'"}), 400
+        
+        allowed_statuses = status_filters[filter_status]
+        
+        def _format_job(job):
+            return {
+                'id': job['id'],
+                'status': job['status'],
+                'progress': job['progress'],
+                'created_at': job['created_at'],
+                'updated_at': job['updated_at']
             }
-        elif filter_status == 'active':
-            # Return only pending or processing jobs
+        
+        if allowed_statuses is None:
             jobs_to_return = {
-                job_id: {
-                    'id': job['id'],
-                    'status': job['status'],
-                    'progress': job['progress'],
-                    'created_at': job['created_at'],
-                    'updated_at': job['updated_at']
-                }
+                job_id: _format_job(job)
                 for job_id, job in all_jobs.items()
-                if job['status'] in [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']]
-            }
-        elif filter_status == 'completed':
-            # Return only completed jobs
-            jobs_to_return = {
-                job_id: {
-                    'id': job['id'],
-                    'status': job['status'],
-                    'progress': job['progress'],
-                    'created_at': job['created_at'],
-                    'updated_at': job['updated_at']
-                }
-                for job_id, job in all_jobs.items()
-                if job['status'] == JOB_STATUS['COMPLETED']
-            }
-        elif filter_status == 'failed':
-            # Return only failed jobs
-            jobs_to_return = {
-                job_id: {
-                    'id': job['id'],
-                    'status': job['status'],
-                    'progress': job['progress'],
-                    'created_at': job['created_at'],
-                    'updated_at': job['updated_at']
-                }
-                for job_id, job in all_jobs.items()
-                if job['status'] == JOB_STATUS['FAILED']
             }
         else:
-            # Invalid filter value
-            return jsonify({"success": False, "error": "Invalid filter parameter. Use 'active', 'all', 'completed', or 'failed'"}), 400
+            jobs_to_return = {
+                job_id: _format_job(job)
+                for job_id, job in all_jobs.items()
+                if job['status'] in allowed_statuses
+            }
             
         # Add job count information
         result = {
@@ -186,7 +182,7 @@ def get_active_jobs_endpoint():
         
     except Exception as e:
         logging.error(f"API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/drive/files')
 def drive_files():
@@ -291,12 +287,15 @@ def drive_files():
 
     except Exception as e:
         logging.error(f"獲取 Google Drive 檔案列表時發生錯誤: {str(e)}", exc_info=True)
-        return jsonify({'success': False, 'error': f'獲取檔案列表失敗: {str(e)}'}), 500
+        return jsonify({'success': False, 'error': '獲取檔案列表失敗'}), 500
 
 @api_bp.route('/job/<job_id>/cancel', methods=['POST'])
 def cancel_job_endpoint(job_id):
     """取消指定任務的 API 端點"""
     from main import processor
+    
+    if not _is_valid_uuid(job_id):
+        return jsonify({"success": False, "error": "無效的任務 ID 格式"}), 400
     
     try:
         logging.info(f"嘗試取消任務: {job_id}")
@@ -325,7 +324,7 @@ def cancel_job_endpoint(job_id):
         
     except Exception as e:
         logging.error(f"取消任務 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {str(e)}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/jobs/status/batch', methods=['POST'])
 def get_batch_job_status_endpoint():
@@ -340,6 +339,8 @@ def get_batch_job_status_endpoint():
         job_ids = data['job_ids']
         if not isinstance(job_ids, list):
             return jsonify({"success": False, "error": "job_ids 必須是陣列"}), 400
+        if len(job_ids) > MAX_BATCH_JOB_IDS:
+            return jsonify({"success": False, "error": f"job_ids 數量不能超過 {MAX_BATCH_JOB_IDS}"}), 400
         
         # 批量獲取任務狀態
         jobs_status = {}
@@ -355,12 +356,15 @@ def get_batch_job_status_endpoint():
         
     except Exception as e:
         logging.error(f"批量獲取任務狀態 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/jobs/<job_id>/result', methods=['GET'])
 def get_job_result_endpoint(job_id):
     """獲取任務結果的 API 端點"""
     from main import processor
+    
+    if not _is_valid_uuid(job_id):
+        return jsonify({"success": False, "error": "無效的任務 ID 格式"}), 400
     
     try:
         logging.debug(f"Getting job result for job_id: {job_id}")
@@ -388,7 +392,7 @@ def get_job_result_endpoint(job_id):
         
     except Exception as e:
         logging.error(f"獲取任務結果 API 錯誤 for job {job_id}: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/jobs/debug', methods=['GET'])
 def debug_jobs_endpoint():
@@ -415,7 +419,7 @@ def debug_jobs_endpoint():
         
     except Exception as e:
         logging.error(f"調試端點錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/meeting-minutes/template', methods=['POST'])
 def generate_meeting_minutes_template():
@@ -473,7 +477,7 @@ def generate_meeting_minutes_template():
         
     except Exception as e:
         logging.error(f"生成會議紀錄模板 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/meeting-minutes/template/from-audio', methods=['POST'])
 def generate_template_from_audio():
@@ -509,7 +513,7 @@ def generate_template_from_audio():
         
     except Exception as e:
         logging.error(f"從音頻生成會議紀錄模板 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/meeting-minutes/template/variants', methods=['GET'])
 def get_template_variants():
@@ -527,4 +531,4 @@ def get_template_variants():
         
     except Exception as e:
         logging.error(f"獲取模板變體 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500

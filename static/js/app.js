@@ -1349,12 +1349,18 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // 定期自動保存（每30秒）
-setInterval(() => {
+let autoSaveTimer = setInterval(() => {
     if (currentUser && Object.keys(taskManager.tasks).length > 0) {
         console.log('定期自動保存任務狀態');
         saveCurrentTasks();
     }
 }, 30000);
+
+// 頁面卸載時清理定時器
+window.addEventListener('beforeunload', () => {
+    if (autoSaveTimer) clearInterval(autoSaveTimer);
+    if (taskManager.updateTimer) clearInterval(taskManager.updateTimer);
+});
 
 // ===== 任務持久化相關函數 =====
 

@@ -7,6 +7,11 @@ services:
       - redis_data:/data
     command: redis-server --appendonly yes --appendfsync everysec
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   audio-processor:
     build: .
@@ -21,13 +26,12 @@ services:
       - HF_HOME=/app/.cache/huggingface
       - TORCH_HOME=/app/.cache/torch
       - PYANNOTE_CACHE=/app/.cache/pyannote
-      # OAuth and credentials configuration - 明確設置容器內的路徑，避免路徑轉換
+      # OAuth and credentials configuration
       - GOOGLE_SA_JSON_PATH=/app/credentials/service-account.json
       - GOOGLE_CLIENT_SECRET_PATH=/app/credentials/client_secret.json
       - EXTERNAL_URL=http://localhost:5000
       - OAUTHLIB_INSECURE_TRANSPORT=1  # 允許在非HTTPS下進行OAuth (開發環境使用)
       - OAUTHLIB_RELAX_TOKEN_SCOPE=1   # 放寬令牌作用域檢查
-      # Optional: Set home directory explicitly for other potential needs
       - HOME=/home/appuser
     env_file:
       - .env
@@ -37,7 +41,8 @@ services:
       - model_cache:/app/.cache
       - pip_cache:/root/.cache/pip
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

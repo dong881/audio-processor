@@ -3,6 +3,9 @@ import logging
 from app import create_app
 from app.services.audio_processor import AudioProcessor
 
+# 設定日誌（確保在初始化前已設定）
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 def initialize_processor():
     """初始化AudioProcessor並處理可能的錯誤"""
     try:
@@ -19,9 +22,13 @@ def initialize_processor():
     except Exception as e:
         logging.error(f"❌ AudioProcessor 初始化失敗: {str(e)}")
         # 在失敗時返回一個有限功能的處理器實例
-        processor = AudioProcessor(max_workers=1)
-        processor.drive_service = None  # 確保標記為未初始化
-        return processor
+        try:
+            processor = AudioProcessor(max_workers=1)
+            processor.drive_service = None  # 確保標記為未初始化
+            return processor
+        except Exception as fallback_error:
+            logging.error(f"❌ AudioProcessor 備用初始化也失敗: {str(fallback_error)}")
+            return None
 
 # 初始化 AudioProcessor (全域實例，供所有模組使用)
 processor = initialize_processor()
@@ -30,8 +37,6 @@ processor = initialize_processor()
 app = create_app()
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
     port = int(os.getenv("PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     

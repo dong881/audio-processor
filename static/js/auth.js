@@ -1,5 +1,12 @@
 // Authentication helper functions
 
+// HTML escape helper to prevent XSS
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // Check if the user is authenticated
 async function checkAuthStatus() {
     try {
@@ -186,15 +193,15 @@ function updateUserInfoUI(user) {
     
     userInfoElement.innerHTML = `
         <div class="user-avatar">
-            <img src="${avatarUrl}" alt="${displayName}" 
+            <img src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(displayName)}" 
                  crossorigin="anonymous"
                  referrerpolicy="no-referrer"
                  onerror="this.onerror=null; this.src='/static/img/avatar-placeholder.png'; this.style.opacity='0.7'; console.log('頭像載入失敗，使用後備圖片');"
                  loading="eager">
         </div>
         <div class="user-details">
-            <span class="user-name">${displayName}</span>
-            <span class="user-email">${displayEmail}</span>
+            <span class="user-name">${escapeHtml(displayName)}</span>
+            <span class="user-email">${escapeHtml(displayEmail)}</span>
         </div>
     `;
     

@@ -172,7 +172,7 @@ class CredentialManager:
         # 如果憑證過期或即將過期（5分鐘內），嘗試刷新
         if credentials.expired or (
             credentials.expiry and 
-            credentials.expiry < datetime.utcnow() + timedelta(minutes=5)
+            credentials.expiry.replace(tzinfo=None) < datetime.utcnow() + timedelta(minutes=5)
         ):
             credentials = self.refresh_credentials(user_id, credentials)
         

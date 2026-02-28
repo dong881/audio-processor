@@ -1,6 +1,4 @@
-import os
-import logging
-from flask import Blueprint, render_template, request, jsonify
+from flask import Blueprint, render_template
 
 # 建立藍圖
 main_bp = Blueprint('main', __name__)

@@ -1,9 +1,7 @@
 import os
-import sys
 import tempfile
 import shutil
 import subprocess
-import io
 import json
 import re
 import time
@@ -24,9 +22,6 @@ from googleapiclient.http import MediaIoBaseDownload
 # 語音處理相關
 import whisper
 from pyannote.audio import Pipeline
-import numpy as np
-import soundfile as sf
-import librosa
 
 # LLM API 相關
 import google.generativeai as genai
@@ -64,6 +59,8 @@ class AudioProcessor:
         self.notion_formatter = NotionFormatter()
         # 任務取消支援
         self.cancelled_jobs = set()  # 存儲已取消的任務ID
+        # 已完成任務最大保留數量
+        self.max_completed_jobs = 100
         
         # 初始化服務
         self.init_services()
@@ -259,8 +256,10 @@ class AudioProcessor:
         names = folder_path.strip('/').split('/')
         parent_id = 'root'
         for name in names:
+            # Escape single quotes in folder name to prevent query injection
+            safe_name = name.replace("'", "\\'")
             results = self.oauth_drive_service.files().list(
-                q=f"trashed = false and mimeType = 'application/vnd.google-apps.folder' and name = '{name}' and '{parent_id}' in parents",
+                q=f"trashed = false and mimeType = 'application/vnd.google-apps.folder' and name = '{safe_name}' and '{parent_id}' in parents",
                 spaces='drive',
                 fields="files(id, name)",
                 pageSize=10
@@ -330,14 +329,14 @@ class AudioProcessor:
             return False
         
     def format_timestamp(self, seconds: float) -> str:
-            """將秒數轉換為可讀時間戳記"""
-            minutes, seconds = divmod(int(seconds), 60)
-            hours, minutes = divmod(minutes, 60)
-            
-            if hours > 0:
-                return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-            else:
-                return f"{minutes:02d}:{seconds:02d}"
+        """將秒數轉換為可讀時間戳記"""
+        minutes, seconds = divmod(int(seconds), 60)
+        hours, minutes = divmod(minutes, 60)
+        
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        else:
+            return f"{minutes:02d}:{seconds:02d}"
             
     def extract_date_from_filename(self, filename: str) -> Optional[str]:
         """從檔案名稱中提取日期，支援多種格式"""
@@ -799,7 +798,7 @@ class AudioProcessor:
                             try:
                                 error_details = transcript_blocks_response.json()
                                 logging.error(f"   詳細錯誤: {json.dumps(error_details, indent=2, ensure_ascii=False)}")
-                            except:
+                            except (ValueError, json.JSONDecodeError):
                                 logging.error(f"   回應內容: {transcript_blocks_response.text}")
                             break  # Authentication errors won't be fixed by retrying
                             
@@ -961,9 +960,10 @@ class AudioProcessor:
             
             response_text = response.text
             # 有時 Gemini 會在 JSON 前後加上額外文字，需要提取純 JSON 部分
-            json_match = re.search(r'({.*?})', response_text, re.DOTALL)
-            if json_match:
-                response_text = json_match.group(1)
+            brace_start = response_text.find('{')
+            brace_end = response_text.rfind('}')
+            if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
+                response_text = response_text[brace_start:brace_end + 1]
             
             # 解析 JSON 回應
             speaker_map = json.loads(response_text)
@@ -1009,10 +1009,17 @@ class AudioProcessor:
             )
             
             response_text = response.text
-            # 提取 JSON 部分
-            json_match = re.search(r'({.*?})', response_text, re.DOTALL)
-            if json_match:
-                response_text = json_match.group(1)
+            # 提取 JSON 部分 - 支援巢狀結構（如陣列）
+            # 先嘗試找到 ```json ``` 代碼塊
+            code_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+            if code_block_match:
+                response_text = code_block_match.group(1)
+            else:
+                # 嘗試匹配最外層的花括號（支援巢狀）
+                brace_start = response_text.find('{')
+                brace_end = response_text.rfind('}')
+                if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
+                    response_text = response_text[brace_start:brace_end + 1]
             
             # 解析 JSON 回應
             summary_data = json.loads(response_text)
@@ -1144,6 +1151,10 @@ class AudioProcessor:
             
             segments.append(segment_data)
         
+        # 建立完整逐字稿文本
+        for segment_data in segments:
+            transcript_full += f"{segment_data['speaker']}: {segment_data['text']}\n"
+        
         logging.info(f"✅ 音檔處理完成，共 {len(segments)} 個段落")
         return transcript_full, segments, list(original_speakers)
 
@@ -1181,6 +1192,8 @@ class AudioProcessor:
     def _process_file_job(self, job_id: str, file_id: str, attachment_file_ids: Optional[List[str]] = None):
         """後台處理音頻檔案的工作函數 (在線程中執行)"""
         attachments_temp_dir = None
+        summary_data = None
+        speaker_map = None
 
         try:
             logging.info(f"[Job {job_id}] 開始處理 file_id: {file_id}")
@@ -1293,8 +1306,9 @@ class AudioProcessor:
                 self._handle_job_cancellation(job_id)
                 return
             
-            # 生成摘要
-            summary_data = self.generate_summary(transcript_for_summary, attachment_texts[0] if attachment_texts else None)
+            # 生成摘要（過濾掉None值）
+            valid_attachment_texts = [t for t in attachment_texts if t]
+            summary_data = self.generate_summary(transcript_for_summary, valid_attachment_texts[0] if valid_attachment_texts else None)
             title = summary_data["title"]
             summary = summary_data["summary"]
             todos = summary_data["todos"]
@@ -1357,10 +1371,10 @@ class AudioProcessor:
             logging.error(f"[Job {job_id}] ❌ 處理失敗: {e}", exc_info=True)
             
             # 準備錯誤結果
-            final_title = summary_data["title"] if 'summary_data' in locals() and summary_data else "處理失敗"
-            final_summary = summary_data["summary"] if 'summary_data' in locals() and summary_data else f"處理過程中發生錯誤: {e}"
-            final_todos = summary_data["todos"] if 'summary_data' in locals() and summary_data else ["檢查處理日誌"]
-            final_speakers = speaker_map if 'speaker_map' in locals() and speaker_map else None
+            final_title = summary_data.get("title", "處理失敗") if summary_data else "處理失敗"
+            final_summary = summary_data.get("summary", "處理過程中發生錯誤") if summary_data else "處理過程中發生錯誤"
+            final_todos = summary_data.get("todos", ["檢查處理日誌"]) if summary_data else ["檢查處理日誌"]
+            final_speakers = speaker_map if speaker_map else None
             
             # 更新工作狀態為失敗
             error_result = {
@@ -1393,6 +1407,8 @@ class AudioProcessor:
             if 'attachments_temp_dir' in locals() and attachments_temp_dir and os.path.exists(attachments_temp_dir):
                 logging.info(f"[Job {job_id}] 🧹 清理附件臨時目錄")
                 shutil.rmtree(attachments_temp_dir)
+            # 清理舊任務防止記憶體洩漏
+            self._cleanup_old_jobs()
 
     def _update_job_progress(self, job_id: str, progress: int, message: str):
         """安全地更新任務進度"""
@@ -1410,15 +1426,11 @@ class AudioProcessor:
         """取消指定的任務"""
         with self.jobs_lock:
             job = self.jobs.get(job_id)
-            
-        if not job:
-            # 詳細記錄所有現有任務ID用於調試
-            with self.jobs_lock:
+            if not job:
                 existing_jobs = list(self.jobs.keys())
-            logging.error(f"任務 {job_id} 不存在。現有任務: {existing_jobs}")
-            return {'success': False, 'error': '任務不存在'}
-        
-        current_status = job['status']
+                logging.error(f"任務 {job_id} 不存在。現有任務: {existing_jobs}")
+                return {'success': False, 'error': '任務不存在'}
+            current_status = job['status']
         logging.info(f"任務 {job_id} 當前狀態: {current_status}")
         
         if current_status in ['completed', 'failed', 'cancelled']:
@@ -1460,14 +1472,12 @@ class AudioProcessor:
         """獲取工作狀態"""
         with self.jobs_lock:
             job = self.jobs.get(job_id)
-            
-        if not job:
-            # 詳細記錄調試信息
-            with self.jobs_lock:
+            if not job:
                 existing_jobs = list(self.jobs.keys())
                 total_jobs = len(self.jobs)
-            logging.warning(f"查詢不存在的任務 {job_id}。目前共有 {total_jobs} 個任務: {existing_jobs[:5]}{'...' if total_jobs > 5 else ''}")
-            return {'error': '工作不存在'}
+                logging.warning(f"查詢不存在的任務 {job_id}。目前共有 {total_jobs} 個任務: {existing_jobs[:5]}{'...' if total_jobs > 5 else ''}")
+                return {'error': '工作不存在'}
+            job = job.copy()
         
         # 基本任務信息
         result = {
@@ -1496,7 +1506,7 @@ class AudioProcessor:
             if job_id in self.jobs:
                 self.jobs[job_id]['progress'] = progress
                 self.jobs[job_id]['message'] = message
-                self.jobs[job_id]['last_updated'] = datetime.utcnow().isoformat() + 'Z'
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
                 if status:
                     self.jobs[job_id]['status'] = status
                 if error:
@@ -1508,19 +1518,42 @@ class AudioProcessor:
                 
                 # 如果狀態是完成或失敗，記錄完成時間
                 if status in [JOB_STATUS['COMPLETED'], JOB_STATUS['FAILED']]:
-                    self.jobs[job_id]['completed_at'] = datetime.utcnow().isoformat() + 'Z'
+                    self.jobs[job_id]['completed_at'] = datetime.now().isoformat()
                     
                 logging.info(f"📊 工作進度更新 - ID: {job_id}, 狀態: {self.jobs[job_id]['status']}, 進度: {progress}%, 訊息: {message}")
             else:
                 logging.warning(f"⚠️ 嘗試更新不存在的工作 ID: {job_id}")
+
+    def clear_credentials(self):
+        """清除OAuth憑證"""
+        self.oauth_drive_service = None
+        logging.info("✅ AudioProcessor OAuth 憑證已清除")
+
+    def _cleanup_old_jobs(self):
+        """清理已完成的舊任務，防止記憶體洩漏"""
+        terminal_statuses = [JOB_STATUS['COMPLETED'], JOB_STATUS['FAILED'], 'cancelled']
+        with self.jobs_lock:
+            terminal_jobs = [
+                (job_id, job.get('updated_at', ''))
+                for job_id, job in self.jobs.items()
+                if job.get('status') in terminal_statuses
+            ]
+            if len(terminal_jobs) > self.max_completed_jobs:
+                # 按更新時間排序，移除最舊的
+                terminal_jobs.sort(key=lambda x: x[1])
+                jobs_to_remove = terminal_jobs[:len(terminal_jobs) - self.max_completed_jobs]
+                for job_id, _ in jobs_to_remove:
+                    del self.jobs[job_id]
+                    self.cancelled_jobs.discard(job_id)
+                logging.info(f"🧹 已清理 {len(jobs_to_remove)} 個舊任務")
 
     def shutdown_executor(self):
         """優雅地關閉 ThreadPoolExecutor"""
         if hasattr(self, 'executor') and self.executor:
             logging.info("🔄 正在關閉 AudioProcessor 的 ThreadPoolExecutor...")
             try:
-                # 等待所有目前正在執行的任務完成，但不接受新任務
-                self.executor.shutdown(wait=True)
+                # 等待目前正在執行的任務完成（最多等待 30 秒），但不接受新任務
+                self.executor.shutdown(wait=True, cancel_futures=True)
                 logging.info("✅ AudioProcessor 的 ThreadPoolExecutor 已成功關閉。")
             except Exception as e:
                 logging.error(f"❌ 關閉 AudioProcessor 的 ThreadPoolExecutor 時發生錯誤: {e}", exc_info=True)

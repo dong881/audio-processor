@@ -18,9 +18,16 @@ COPY requirements.txt .
 RUN mkdir -p /root/.cache/pip && \
     pip install --no-cache-dir -r requirements.txt --cache-dir /root/.cache/pip
 
+# Create a non-root user for running the application
+RUN groupadd -r appuser && useradd -r -g appuser -d /home/appuser -s /sbin/nologin appuser && \
+    mkdir -p /home/appuser
+
 # Copy the rest of the application code into the container at /app
 # This includes main.py, the app/ directory, etc.
 COPY . .
+
+# Ensure the non-root user has access to required directories
+RUN chown -R appuser:appuser /app /home/appuser
 
 # Make port 5000 available to the world outside this container
 EXPOSE 5000
@@ -36,6 +43,9 @@ ENV PYANNOTE_CACHE=/app/.cache/pyannote
 # Credential paths (matches docker-compose volumes and env vars)
 ENV GOOGLE_SA_JSON_PATH=/app/credentials/service-account.json
 ENV GOOGLE_CLIENT_SECRET_PATH=/app/credentials/client_secret.json
+
+# Switch to non-root user
+USER appuser
 
 # Run main.py when the container launches using Gunicorn
 # Gunicorn is specified in requirements.txt

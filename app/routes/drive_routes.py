@@ -60,4 +60,4 @@ def list_files():
         
     except Exception as e:
         current_app.logger.error(f"列舉檔案時出錯: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': '列舉檔案時出錯'}), 500

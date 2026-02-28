@@ -1,13 +1,13 @@
 import os
 import logging
 import json
-from flask import Blueprint, request, jsonify, redirect, session, url_for
+from datetime import datetime
+from flask import Blueprint, request, jsonify, redirect, session
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 import google.auth.transport.requests
+import google.auth.exceptions
 from google.oauth2 import id_token
-import google.oauth2.credentials
-import google_auth_oauthlib.flow
 import googleapiclient.discovery
 from app.services.credential_manager import CredentialManager
 
@@ -66,10 +66,8 @@ def auth_google():
                 redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
                 logging.info(f"使用環境變數設定的外部URL: {redirect_uri}")
             else:
-                # 如果正在使用Docker內部地址且EXTERNAL_URL未設定，則使用預期的外部地址
-                # 這應該與 client_secret.json 和 Google Cloud Console 中的 URI 之一匹配。
-                redirect_uri = "https://audio-processor.ddns.net/api/auth/callback"
-                logging.info(f"使用硬編碼的預期外部URL: {redirect_uri}")
+                # EXTERNAL_URL 未設定，保持使用原始 redirect_uri
+                logging.warning("⚠️ EXTERNAL_URL 環境變數未設定，OAuth 可能無法正常運作")
             
         logging.info(f"🔄 OAuth 重定向 URI: {redirect_uri}")
         
@@ -121,14 +119,14 @@ def auth_google():
             logging.error(f"❌ 建立OAuth流程失敗: {str(e)}")
             return jsonify({
                 'success': False,
-                'error': f'OAuth 流程初始化失敗: {str(e)}'
+                'error': 'OAuth 流程初始化失敗'
             }), 500
             
     except Exception as e:
         logging.error(f"❌ OAuth 流程初始化失敗: {str(e)}")
         return jsonify({
             'success': False,
-            'error': f'OAuth 流程初始化失敗: {str(e)}'
+            'error': 'OAuth 流程初始化失敗'
         }), 500
 
 @auth_bp.route('/api/auth/google/login')
@@ -192,9 +190,9 @@ def auth_callback():
                     redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
                     logging.info(f"回調中：使用環境變數EXTERNAL_URL設定的重定向URI: {redirect_uri}")
                 else:
-                    # 如果EXTERNAL_URL未設定，且是本地請求，則預設為預期的公開URI
-                    redirect_uri = "https://audio-processor.ddns.net/api/auth/callback"
-                    logging.info(f"回調中：使用硬編碼的預期外部URL: {redirect_uri}")
+                    # EXTERNAL_URL 未設定，保持使用原始 redirect_uri
+                    redirect_uri = base_redirect_uri
+                    logging.warning("⚠️ 回調中：EXTERNAL_URL 環境變數未設定")
             else:
                 # 如果不是本地請求，則直接使用基於請求的URL
                 redirect_uri = base_redirect_uri
@@ -221,6 +219,17 @@ def auth_callback():
             
             session['authenticated'] = True
             logging.info("✅ OAuth 認證狀態已設置為 True")
+
+            # 保存憑證到 session
+            session['credentials'] = {
+                'token': credentials.token,
+                'refresh_token': credentials.refresh_token,
+                'token_uri': credentials.token_uri,
+                'client_id': credentials.client_id,
+                'client_secret': credentials.client_secret,
+                'scopes': credentials.scopes,
+                'id_token': credentials.id_token if hasattr(credentials, 'id_token') else None
+            }
 
             # 保存用戶信息到session - 改進的用戶資訊獲取邏輯
             user_info = None
@@ -321,26 +330,32 @@ def auth_callback():
                     credential_manager.extend_credential_expiry(user_id, 60)
                 else:
                     logging.warning("⚠️ 憑證保存到 Redis 失敗，但認證仍然有效")
-                        
+            
+            # *** 設置 OAuth 憑證到 AudioProcessor ***
+            try:
+                if processor is not None:
+                    if processor.set_oauth_credentials(credentials):
+                        logging.info("✅ 已成功將OAuth憑證設置到AudioProcessor")
+                    else:
+                        logging.warning("⚠️ 設置OAuth憑證到AudioProcessor失敗")
+            except Exception as proc_err:
+                logging.warning(f"⚠️ 設置AudioProcessor憑證時發生錯誤: {proc_err}")
+                    
             return redirect('/')
 
         except google.auth.exceptions.RefreshError as re:
-            error_msg = f"OAuth 憑證刷新失敗: {str(re)}"
-            logging.error(f"❌ OAuth 回調處理錯誤 (憑證刷新): {error_msg}", exc_info=True)
-            return redirect(f'/login?error={error_msg}')
+            logging.error(f"❌ OAuth 回調處理錯誤 (憑證刷新): {re}", exc_info=True)
+            return redirect('/login?error=OAuth 憑證刷新失敗')
         except google.auth.exceptions.OAuthError as oe:
-            error_msg = f"OAuth 令牌交換或驗證失敗: {str(oe)}"
-            logging.error(f"❌ OAuth 回調處理錯誤 (OAuthError): {error_msg}", exc_info=True)
-            return redirect(f'/login?error={error_msg}')
+            logging.error(f"❌ OAuth 回調處理錯誤 (OAuthError): {oe}", exc_info=True)
+            return redirect('/login?error=OAuth 令牌交換或驗證失敗')
         except Exception as e:
-            error_msg = f"處理 OAuth 回調時發生內部錯誤: {str(e)}"
-            logging.error(f"❌ OAuth 回調處理錯誤 (內部): {error_msg}", exc_info=True)
-            return redirect(f'/login?error={error_msg}')    
+            logging.error(f"❌ OAuth 回調處理錯誤 (內部): {e}", exc_info=True)
+            return redirect('/login?error=處理 OAuth 回調時發生錯誤')    
             
     except Exception as e:
-        error_msg = f"OAuth 回調前置檢查失敗: {str(e)}"
-        logging.error(f"❌ OAuth 回調處理錯誤 (前置檢查): {error_msg}", exc_info=True)
-        return redirect(f'/login?error={error_msg}')
+        logging.error(f"❌ OAuth 回調處理錯誤 (前置檢查): {e}", exc_info=True)
+        return redirect('/login?error=OAuth 回調處理失敗')
 
 @auth_bp.route('/api/auth/token', methods=['POST'])
 def auth_token():
@@ -405,6 +420,17 @@ def auth_token():
             # 設定會話認證狀態
             session['authenticated'] = True
             
+            # 保存憑證到 session
+            session['credentials'] = {
+                'token': credentials.token,
+                'refresh_token': credentials.refresh_token,
+                'token_uri': credentials.token_uri,
+                'client_id': credentials.client_id,
+                'client_secret': credentials.client_secret,
+                'scopes': credentials.scopes,
+                'id_token': credentials.id_token if hasattr(credentials, 'id_token') else None
+            }
+            
             # 保存用戶信息到session
             try:
                 # 獲取用戶資訊
@@ -441,11 +467,11 @@ def auth_token():
                 
         except Exception as e:
             logging.error(f"交換令牌失敗: {str(e)}")
-            return jsonify({'success': False, 'error': f"交換令牌失敗: {str(e)}"})
+            return jsonify({'success': False, 'error': '交換令牌失敗'})
             
     except Exception as e:
         logging.error(f"處理令牌交換時發生錯誤: {str(e)}")
-        return jsonify({'success': False, 'error': f"處理令牌交換時發生錯誤: {str(e)}"})
+        return jsonify({'success': False, 'error': '處理令牌交換時發生錯誤'})
 
 @auth_bp.route('/api/auth/status')
 def auth_status():
@@ -555,7 +581,7 @@ def auth_status():
         logging.error(f"檢查認證狀態時出錯: {e}")
         return jsonify({
             'authenticated': False,
-            'error': str(e)
+            'error': '檢查認證狀態時出錯'
         }), 500
 
 # 新增：專門用於刷新用戶資訊的 API 端點
@@ -705,4 +731,4 @@ def auth_logout():
         
     except Exception as e:
         logging.error(f"登出處理失敗: {str(e)}")
-        return jsonify({'success': False, 'error': f'登出失敗: {str(e)}'}), 500
+        return jsonify({'success': False, 'error': '登出失敗'}), 500

@@ -169,7 +169,7 @@ Key points discussed:
                     # 解析ISO格式時間
                     dt = datetime.fromisoformat(modified_time.replace('Z', '+00:00'))
                     date = dt.strftime("%Y-%m-%d")
-                except:
+                except (ValueError, TypeError):
                     date = None
             else:
                 date = None
