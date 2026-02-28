@@ -7,6 +7,8 @@ from app.utils.constants import JOB_STATUS
 # 建立藍圖
 api_bp = Blueprint('api', __name__)
 
+MAX_BATCH_JOB_IDS = 100
+
 def _is_valid_uuid(value: str) -> bool:
     """驗證字串是否為有效的 UUID 格式"""
     try:
@@ -337,8 +339,8 @@ def get_batch_job_status_endpoint():
         job_ids = data['job_ids']
         if not isinstance(job_ids, list):
             return jsonify({"success": False, "error": "job_ids 必須是陣列"}), 400
-        if len(job_ids) > 100:
-            return jsonify({"success": False, "error": "job_ids 數量不能超過 100"}), 400
+        if len(job_ids) > MAX_BATCH_JOB_IDS:
+            return jsonify({"success": False, "error": f"job_ids 數量不能超過 {MAX_BATCH_JOB_IDS}"}), 400
         
         # 批量獲取任務狀態
         jobs_status = {}

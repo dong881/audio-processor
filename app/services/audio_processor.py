@@ -960,9 +960,10 @@ class AudioProcessor:
             
             response_text = response.text
             # 有時 Gemini 會在 JSON 前後加上額外文字，需要提取純 JSON 部分
-            json_match = re.search(r'(\{[^{}]*\})', response_text, re.DOTALL)
-            if json_match:
-                response_text = json_match.group(1)
+            brace_start = response_text.find('{')
+            brace_end = response_text.rfind('}')
+            if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
+                response_text = response_text[brace_start:brace_end + 1]
             
             # 解析 JSON 回應
             speaker_map = json.loads(response_text)

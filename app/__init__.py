@@ -16,7 +16,11 @@ def create_app():
     app = Flask(__name__, 
                 static_folder='../static',
                 template_folder='../templates')
-    app.secret_key = os.getenv('FLASK_SECRET_KEY', os.urandom(24).hex())
+    secret_key = os.getenv('FLASK_SECRET_KEY')
+    if not secret_key:
+        logging.warning("⚠️ FLASK_SECRET_KEY 未設定，使用隨機金鑰（重啟後 session 將失效）")
+        secret_key = os.urandom(24).hex()
+    app.secret_key = secret_key
     
     # *** 新增：初始化憑證管理器 ***
     credential_manager = CredentialManager()
