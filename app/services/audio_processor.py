@@ -1187,6 +1187,8 @@ class AudioProcessor:
     def _process_file_job(self, job_id: str, file_id: str, attachment_file_ids: Optional[List[str]] = None):
         """後台處理音頻檔案的工作函數 (在線程中執行)"""
         attachments_temp_dir = None
+        summary_data = None
+        speaker_map = None
 
         try:
             logging.info(f"[Job {job_id}] 開始處理 file_id: {file_id}")
@@ -1364,10 +1366,10 @@ class AudioProcessor:
             logging.error(f"[Job {job_id}] ❌ 處理失敗: {e}", exc_info=True)
             
             # 準備錯誤結果
-            final_title = summary_data["title"] if 'summary_data' in locals() and summary_data else "處理失敗"
-            final_summary = summary_data["summary"] if 'summary_data' in locals() and summary_data else f"處理過程中發生錯誤: {e}"
-            final_todos = summary_data["todos"] if 'summary_data' in locals() and summary_data else ["檢查處理日誌"]
-            final_speakers = speaker_map if 'speaker_map' in locals() and speaker_map else None
+            final_title = summary_data.get("title", "處理失敗") if summary_data else "處理失敗"
+            final_summary = summary_data.get("summary", "處理過程中發生錯誤") if summary_data else "處理過程中發生錯誤"
+            final_todos = summary_data.get("todos", ["檢查處理日誌"]) if summary_data else ["檢查處理日誌"]
+            final_speakers = speaker_map if speaker_map else None
             
             # 更新工作狀態為失敗
             error_result = {

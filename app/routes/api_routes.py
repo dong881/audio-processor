@@ -115,61 +115,39 @@ def get_active_jobs_endpoint():
             # First create a snapshot of all jobs while holding the lock
             all_jobs = {job_id: job.copy() for job_id, job in processor.jobs.items()}
         
-        # Process the jobs data outside the lock to minimize lock contention
-        if filter_status == 'all':
-            # Return all jobs regardless of status
-            jobs_to_return = {
-                job_id: {
-                    'id': job['id'],
-                    'status': job['status'],
-                    'progress': job['progress'],
-                    'created_at': job['created_at'],
-                    'updated_at': job['updated_at']
-                }
-                for job_id, job in all_jobs.items()
+        # Define status filter map
+        status_filters = {
+            'all': None,
+            'active': [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']],
+            'completed': [JOB_STATUS['COMPLETED']],
+            'failed': [JOB_STATUS['FAILED']],
+        }
+        
+        if filter_status not in status_filters:
+            return jsonify({"success": False, "error": "Invalid filter parameter. Use 'active', 'all', 'completed', or 'failed'"}), 400
+        
+        allowed_statuses = status_filters[filter_status]
+        
+        def _format_job(job):
+            return {
+                'id': job['id'],
+                'status': job['status'],
+                'progress': job['progress'],
+                'created_at': job['created_at'],
+                'updated_at': job['updated_at']
             }
-        elif filter_status == 'active':
-            # Return only pending or processing jobs
+        
+        if allowed_statuses is None:
             jobs_to_return = {
-                job_id: {
-                    'id': job['id'],
-                    'status': job['status'],
-                    'progress': job['progress'],
-                    'created_at': job['created_at'],
-                    'updated_at': job['updated_at']
-                }
+                job_id: _format_job(job)
                 for job_id, job in all_jobs.items()
-                if job['status'] in [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']]
-            }
-        elif filter_status == 'completed':
-            # Return only completed jobs
-            jobs_to_return = {
-                job_id: {
-                    'id': job['id'],
-                    'status': job['status'],
-                    'progress': job['progress'],
-                    'created_at': job['created_at'],
-                    'updated_at': job['updated_at']
-                }
-                for job_id, job in all_jobs.items()
-                if job['status'] == JOB_STATUS['COMPLETED']
-            }
-        elif filter_status == 'failed':
-            # Return only failed jobs
-            jobs_to_return = {
-                job_id: {
-                    'id': job['id'],
-                    'status': job['status'],
-                    'progress': job['progress'],
-                    'created_at': job['created_at'],
-                    'updated_at': job['updated_at']
-                }
-                for job_id, job in all_jobs.items()
-                if job['status'] == JOB_STATUS['FAILED']
             }
         else:
-            # Invalid filter value
-            return jsonify({"success": False, "error": "Invalid filter parameter. Use 'active', 'all', 'completed', or 'failed'"}), 400
+            jobs_to_return = {
+                job_id: _format_job(job)
+                for job_id, job in all_jobs.items()
+                if job['status'] in allowed_statuses
+            }
             
         # Add job count information
         result = {
@@ -291,7 +269,7 @@ def drive_files():
 
     except Exception as e:
         logging.error(f"獲取 Google Drive 檔案列表時發生錯誤: {str(e)}", exc_info=True)
-        return jsonify({'success': False, 'error': f'獲取檔案列表失敗: {str(e)}'}), 500
+        return jsonify({'success': False, 'error': '獲取檔案列表失敗'}), 500
 
 @api_bp.route('/job/<job_id>/cancel', methods=['POST'])
 def cancel_job_endpoint(job_id):

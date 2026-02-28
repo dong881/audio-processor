@@ -2,12 +2,12 @@ import os
 import logging
 import json
 from datetime import datetime
-from flask import Blueprint, request, jsonify, redirect, session, url_for
+from flask import Blueprint, request, jsonify, redirect, session
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 import google.auth.transport.requests
+import google.auth.exceptions
 from google.oauth2 import id_token
-import google.oauth2.credentials
 import googleapiclient.discovery
 from app.services.credential_manager import CredentialManager
 
@@ -119,14 +119,14 @@ def auth_google():
             logging.error(f"❌ 建立OAuth流程失敗: {str(e)}")
             return jsonify({
                 'success': False,
-                'error': f'OAuth 流程初始化失敗: {str(e)}'
+                'error': 'OAuth 流程初始化失敗'
             }), 500
             
     except Exception as e:
         logging.error(f"❌ OAuth 流程初始化失敗: {str(e)}")
         return jsonify({
             'success': False,
-            'error': f'OAuth 流程初始化失敗: {str(e)}'
+            'error': 'OAuth 流程初始化失敗'
         }), 500
 
 @auth_bp.route('/api/auth/google/login')
@@ -219,6 +219,17 @@ def auth_callback():
             
             session['authenticated'] = True
             logging.info("✅ OAuth 認證狀態已設置為 True")
+
+            # 保存憑證到 session
+            session['credentials'] = {
+                'token': credentials.token,
+                'refresh_token': credentials.refresh_token,
+                'token_uri': credentials.token_uri,
+                'client_id': credentials.client_id,
+                'client_secret': credentials.client_secret,
+                'scopes': credentials.scopes,
+                'id_token': credentials.id_token if hasattr(credentials, 'id_token') else None
+            }
 
             # 保存用戶信息到session - 改進的用戶資訊獲取邏輯
             user_info = None
@@ -333,22 +344,18 @@ def auth_callback():
             return redirect('/')
 
         except google.auth.exceptions.RefreshError as re:
-            error_msg = f"OAuth 憑證刷新失敗: {str(re)}"
-            logging.error(f"❌ OAuth 回調處理錯誤 (憑證刷新): {error_msg}", exc_info=True)
-            return redirect(f'/login?error={error_msg}')
+            logging.error(f"❌ OAuth 回調處理錯誤 (憑證刷新): {re}", exc_info=True)
+            return redirect('/login?error=OAuth 憑證刷新失敗')
         except google.auth.exceptions.OAuthError as oe:
-            error_msg = f"OAuth 令牌交換或驗證失敗: {str(oe)}"
-            logging.error(f"❌ OAuth 回調處理錯誤 (OAuthError): {error_msg}", exc_info=True)
-            return redirect(f'/login?error={error_msg}')
+            logging.error(f"❌ OAuth 回調處理錯誤 (OAuthError): {oe}", exc_info=True)
+            return redirect('/login?error=OAuth 令牌交換或驗證失敗')
         except Exception as e:
-            error_msg = f"處理 OAuth 回調時發生內部錯誤: {str(e)}"
-            logging.error(f"❌ OAuth 回調處理錯誤 (內部): {error_msg}", exc_info=True)
-            return redirect(f'/login?error={error_msg}')    
+            logging.error(f"❌ OAuth 回調處理錯誤 (內部): {e}", exc_info=True)
+            return redirect('/login?error=處理 OAuth 回調時發生錯誤')    
             
     except Exception as e:
-        error_msg = f"OAuth 回調前置檢查失敗: {str(e)}"
-        logging.error(f"❌ OAuth 回調處理錯誤 (前置檢查): {error_msg}", exc_info=True)
-        return redirect(f'/login?error={error_msg}')
+        logging.error(f"❌ OAuth 回調處理錯誤 (前置檢查): {e}", exc_info=True)
+        return redirect('/login?error=OAuth 回調處理失敗')
 
 @auth_bp.route('/api/auth/token', methods=['POST'])
 def auth_token():
@@ -413,6 +420,17 @@ def auth_token():
             # 設定會話認證狀態
             session['authenticated'] = True
             
+            # 保存憑證到 session
+            session['credentials'] = {
+                'token': credentials.token,
+                'refresh_token': credentials.refresh_token,
+                'token_uri': credentials.token_uri,
+                'client_id': credentials.client_id,
+                'client_secret': credentials.client_secret,
+                'scopes': credentials.scopes,
+                'id_token': credentials.id_token if hasattr(credentials, 'id_token') else None
+            }
+            
             # 保存用戶信息到session
             try:
                 # 獲取用戶資訊
@@ -449,11 +467,11 @@ def auth_token():
                 
         except Exception as e:
             logging.error(f"交換令牌失敗: {str(e)}")
-            return jsonify({'success': False, 'error': f"交換令牌失敗: {str(e)}"})
+            return jsonify({'success': False, 'error': '交換令牌失敗'})
             
     except Exception as e:
         logging.error(f"處理令牌交換時發生錯誤: {str(e)}")
-        return jsonify({'success': False, 'error': f"處理令牌交換時發生錯誤: {str(e)}"})
+        return jsonify({'success': False, 'error': '處理令牌交換時發生錯誤'})
 
 @auth_bp.route('/api/auth/status')
 def auth_status():
@@ -563,7 +581,7 @@ def auth_status():
         logging.error(f"檢查認證狀態時出錯: {e}")
         return jsonify({
             'authenticated': False,
-            'error': str(e)
+            'error': '檢查認證狀態時出錯'
         }), 500
 
 # 新增：專門用於刷新用戶資訊的 API 端點
@@ -713,4 +731,4 @@ def auth_logout():
         
     except Exception as e:
         logging.error(f"登出處理失敗: {str(e)}")
-        return jsonify({'success': False, 'error': f'登出失敗: {str(e)}'}), 500
+        return jsonify({'success': False, 'error': '登出失敗'}), 500
