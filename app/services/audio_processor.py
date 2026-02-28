@@ -64,6 +64,8 @@ class AudioProcessor:
         self.notion_formatter = NotionFormatter()
         # 任務取消支援
         self.cancelled_jobs = set()  # 存儲已取消的任務ID
+        # 已完成任務最大保留數量
+        self.max_completed_jobs = 100
         
         # 初始化服務
         self.init_services()
@@ -1409,6 +1411,8 @@ class AudioProcessor:
             if 'attachments_temp_dir' in locals() and attachments_temp_dir and os.path.exists(attachments_temp_dir):
                 logging.info(f"[Job {job_id}] 🧹 清理附件臨時目錄")
                 shutil.rmtree(attachments_temp_dir)
+            # 清理舊任務防止記憶體洩漏
+            self._cleanup_old_jobs()
 
     def _update_job_progress(self, job_id: str, progress: int, message: str):
         """安全地更新任務進度"""
@@ -1529,13 +1533,31 @@ class AudioProcessor:
         self.oauth_drive_service = None
         logging.info("✅ AudioProcessor OAuth 憑證已清除")
 
+    def _cleanup_old_jobs(self):
+        """清理已完成的舊任務，防止記憶體洩漏"""
+        terminal_statuses = [JOB_STATUS['COMPLETED'], JOB_STATUS['FAILED'], 'cancelled']
+        with self.jobs_lock:
+            terminal_jobs = [
+                (job_id, job.get('updated_at', ''))
+                for job_id, job in self.jobs.items()
+                if job.get('status') in terminal_statuses
+            ]
+            if len(terminal_jobs) > self.max_completed_jobs:
+                # 按更新時間排序，移除最舊的
+                terminal_jobs.sort(key=lambda x: x[1])
+                jobs_to_remove = terminal_jobs[:len(terminal_jobs) - self.max_completed_jobs]
+                for job_id, _ in jobs_to_remove:
+                    del self.jobs[job_id]
+                    self.cancelled_jobs.discard(job_id)
+                logging.info(f"🧹 已清理 {len(jobs_to_remove)} 個舊任務")
+
     def shutdown_executor(self):
         """優雅地關閉 ThreadPoolExecutor"""
         if hasattr(self, 'executor') and self.executor:
             logging.info("🔄 正在關閉 AudioProcessor 的 ThreadPoolExecutor...")
             try:
-                # 等待所有目前正在執行的任務完成，但不接受新任務
-                self.executor.shutdown(wait=True)
+                # 等待目前正在執行的任務完成（最多等待 30 秒），但不接受新任務
+                self.executor.shutdown(wait=True, cancel_futures=True)
                 logging.info("✅ AudioProcessor 的 ThreadPoolExecutor 已成功關閉。")
             except Exception as e:
                 logging.error(f"❌ 關閉 AudioProcessor 的 ThreadPoolExecutor 時發生錯誤: {e}", exc_info=True)

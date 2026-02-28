@@ -8,6 +8,14 @@ from app.utils.constants import JOB_STATUS
 # 建立藍圖
 api_bp = Blueprint('api', __name__)
 
+def _is_valid_uuid(value: str) -> bool:
+    """驗證字串是否為有效的 UUID 格式"""
+    try:
+        uuid.UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
+
 @api_bp.route('/health', methods=['GET'])
 def health_check():
     """健康檢查端點"""
@@ -85,6 +93,9 @@ def process_audio_endpoint():
 def get_job_status_endpoint(job_id):
     """獲取工作狀態的 API 端點"""
     from main import processor
+    
+    if not _is_valid_uuid(job_id):
+        return jsonify({"success": False, "error": "無效的任務 ID 格式"}), 400
     
     try:
         logging.debug(f"Getting job status for job_id: {job_id}")
@@ -282,6 +293,9 @@ def cancel_job_endpoint(job_id):
     """取消指定任務的 API 端點"""
     from main import processor
     
+    if not _is_valid_uuid(job_id):
+        return jsonify({"success": False, "error": "無效的任務 ID 格式"}), 400
+    
     try:
         logging.info(f"嘗試取消任務: {job_id}")
         
@@ -347,6 +361,9 @@ def get_batch_job_status_endpoint():
 def get_job_result_endpoint(job_id):
     """獲取任務結果的 API 端點"""
     from main import processor
+    
+    if not _is_valid_uuid(job_id):
+        return jsonify({"success": False, "error": "無效的任務 ID 格式"}), 400
     
     try:
         logging.debug(f"Getting job result for job_id: {job_id}")
