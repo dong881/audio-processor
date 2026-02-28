@@ -15,7 +15,7 @@ api_bp = Blueprint('api', __name__)
 
 def _get_processor():
     """取得全域 AudioProcessor 實例"""
-    processor = _get_processor()
+    from main import processor
     return processor
 
 
