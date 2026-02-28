@@ -9,36 +9,33 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy the requirements file into the container at /app
+# Copy the requirements file first (for better Docker layer caching)
 COPY requirements.txt .
 
-# Install any needed packages specified in requirements.txt
-# Using --no-cache-dir to reduce image size
-# Using a persistent cache directory for pip that will be a volume, matching docker-compose.yml
+# Install Python dependencies
 RUN mkdir -p /root/.cache/pip && \
     pip install --no-cache-dir -r requirements.txt --cache-dir /root/.cache/pip
 
-# Copy the rest of the application code into the container at /app
-# This includes main.py, the app/ directory, etc.
+# Copy the rest of the application code into the container
 COPY . .
+
+# Create necessary directories
+RUN mkdir -p /app/credentials /app/.cache
 
 # Make port 5000 available to the world outside this container
 EXPOSE 5000
 
 # Define environment variables (can be overridden by docker-compose)
-ENV FLASK_APP=main.py
-ENV PORT=5000
-ENV FLASK_DEBUG=false
-# Cache directories for models, etc. (matches docker-compose volumes)
-ENV HF_HOME=/app/.cache/huggingface
-ENV TORCH_HOME=/app/.cache/torch
-ENV PYANNOTE_CACHE=/app/.cache/pyannote
-# Credential paths (matches docker-compose volumes and env vars)
-ENV GOOGLE_SA_JSON_PATH=/app/credentials/service-account.json
-ENV GOOGLE_CLIENT_SECRET_PATH=/app/credentials/client_secret.json
+ENV FLASK_APP=main.py \
+    PORT=5000 \
+    FLASK_DEBUG=false \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/app/.cache/huggingface \
+    TORCH_HOME=/app/.cache/torch \
+    PYANNOTE_CACHE=/app/.cache/pyannote \
+    GOOGLE_SA_JSON_PATH=/app/credentials/service-account.json \
+    GOOGLE_CLIENT_SECRET_PATH=/app/credentials/client_secret.json
 
 # Run main.py when the container launches using Gunicorn
-# Gunicorn is specified in requirements.txt
-# Bind to 0.0.0.0 to be accessible from outside the container
-# Number of workers can be adjusted. Timeout increased for potentially long audio tasks.
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "main:app", "--timeout", "600", "--workers", "2"] 

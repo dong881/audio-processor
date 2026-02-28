@@ -7,6 +7,12 @@ services:
       - redis_data:/data
     command: redis-server --appendonly yes --appendfsync everysec
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   audio-processor:
     build: .
@@ -37,8 +43,20 @@ services:
       - model_cache:/app/.cache
       - pip_cache:/root/.cache/pip
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')\""]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   pip_cache:

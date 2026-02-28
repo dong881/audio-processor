@@ -1,8 +1,44 @@
 import re
 from typing import List, Dict, Any
 
+# 預編譯正則表達式以提升效能
+_RE_INLINE_CODE = re.compile(r'`([^`]+)`')
+_RE_BOLD = re.compile(r'\*\*(.*?)\*\*')
+_RE_ITALIC = re.compile(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)')
+_RE_STRIKETHROUGH = re.compile(r'~~(.*?)~~')
+_RE_LINK = re.compile(r'\[(.*?)\]\((.*?)\)')
+_RE_NUMBERED_LIST = re.compile(r'^\d+\.\s')
+
 
 class NotionFormatter:
+    def _build_table_block(self, table_rows: list) -> dict:
+        """從收集的表格行建立 Notion 表格區塊"""
+        table_block = {
+            "object": "block",
+            "type": "table",
+            "table": {
+                "table_width": len(table_rows[0]) if table_rows else 0,
+                "has_column_header": True,
+                "has_row_header": False,
+                "children": []
+            }
+        }
+
+        for row in table_rows:
+            table_row = {
+                "object": "block",
+                "type": "table_row",
+                "table_row": {
+                    "cells": [
+                        self.process_inline_formatting(cell.strip())
+                        for cell in row
+                    ]
+                }
+            }
+            table_block["table"]["children"].append(table_row)
+
+        return table_block
+
     def process_note_format_for_notion(self, text: str) -> list:
         """將Markdown文本處理成適合 Notion API 的格式"""
         blocks = []
@@ -62,36 +98,7 @@ class NotionFormatter:
             # 處理表格結束（檢測到非表格行）
             if in_table and not line.startswith("|"):
                 if table_rows:
-                    # 創建表格區塊
-                    table_block = {
-                        "object": "block",
-                        "type": "table",
-                        "table": {
-                            "table_width": len(table_rows[0]) if table_rows else 0,
-                            "has_column_header": True,
-                            "has_row_header": False,
-                            "children": []
-                        }
-                    }
-                    
-                    # 添加表格行
-                    for row_idx, row in enumerate(table_rows):
-                        table_row = {
-                            "object": "block",
-                            "type": "table_row",
-                            "table_row": {
-                                "cells": []
-                            }
-                        }
-                        
-                        for cell in row:
-                            table_row["table_row"]["cells"].append(
-                                self.process_inline_formatting(cell.strip())
-                            )
-                            
-                        table_block["table"]["children"].append(table_row)
-                    
-                    blocks.append(table_block)
+                    blocks.append(self._build_table_block(table_rows))
                     
                 in_table = False
                 table_rows = []
@@ -182,8 +189,8 @@ class NotionFormatter:
                 })
             
             # 處理編號列表 (1. 2. 等)
-            elif re.match(r'^\d+\.\s', line):
-                content = re.sub(r'^\d+\.\s', '', line).strip()
+            elif _RE_NUMBERED_LIST.match(line):
+                content = _RE_NUMBERED_LIST.sub('', line).strip()
                 # 應用行內格式化處理
                 rich_text_content = self.process_inline_formatting(content)
                 
@@ -265,36 +272,7 @@ class NotionFormatter:
             })
             
         if in_table and table_rows:
-            # 創建表格區塊
-            table_block = {
-                "object": "block",
-                "type": "table",
-                "table": {
-                    "table_width": len(table_rows[0]) if table_rows else 0,
-                    "has_column_header": True,
-                    "has_row_header": False,
-                    "children": []
-                }
-            }
-            
-            # 添加表格行
-            for row_idx, row in enumerate(table_rows):
-                table_row = {
-                    "object": "block",
-                    "type": "table_row",
-                    "table_row": {
-                        "cells": []
-                    }
-                }
-                
-                for cell in row:
-                    table_row["table_row"]["cells"].append(
-                        self.process_inline_formatting(cell.strip())
-                    )
-                    
-                table_block["table"]["children"].append(table_row)
-            
-            blocks.append(table_block)
+            blocks.append(self._build_table_block(table_rows))
                 
         return blocks
 
@@ -302,21 +280,6 @@ class NotionFormatter:
         """處理行內格式化（粗體、斜體、代碼等）"""
         if not text:
             return [{"type": "text", "text": {"content": ""}}]
-        
-        # 處理行內代碼（使用反引號 `code`）
-        pattern_inline_code = r'`([^`]+)`'
-        
-        # 處理粗體（使用雙星號 **bold**）
-        pattern_bold = r'\*\*(.*?)\*\*'
-        
-        # 處理斜體（使用單星號 *italic*）
-        pattern_italic = r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)'
-        
-        # 處理刪除線（使用雙波浪線 ~~strikethrough~~）
-        pattern_strikethrough = r'~~(.*?)~~'
-        
-        # 處理連結（使用 [text](url) 格式）
-        pattern_link = r'\[(.*?)\]\((.*?)\)'
         
         # 儲存所有的格式化區段
         segments = []
@@ -327,13 +290,13 @@ class NotionFormatter:
         # 請求粗體、斜體、刪除線和代碼的所有匹配
         all_matches = []
         
-        # 收集所有格式匹配
+        # 收集所有格式匹配（使用預編譯的正則表達式）
         for pattern, format_type in [
-            (pattern_inline_code, "code"),
-            (pattern_bold, "bold"),
-            (pattern_italic, "italic"),
-            (pattern_strikethrough, "strikethrough"),
-            (pattern_link, "link")
+            (_RE_INLINE_CODE, "code"),
+            (_RE_BOLD, "bold"),
+            (_RE_ITALIC, "italic"),
+            (_RE_STRIKETHROUGH, "strikethrough"),
+            (_RE_LINK, "link")
         ]:
             for match in re.finditer(pattern, text):
                 # 存儲匹配的開始位置、結束位置和標籤類型

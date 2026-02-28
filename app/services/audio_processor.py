@@ -41,8 +41,15 @@ except ImportError:
     print("⚠️ PyPDF2 未安裝，無法處理 PDF 附件。請執行 'pip install PyPDF2'")
     PyPDF2 = None
 
-# 導入工作狀態常數
-from app.utils.constants import JOB_STATUS
+# 導入工作狀態常數與設定
+from app.utils.constants import (
+    JOB_STATUS, JobStatus,
+    MAX_BLOCKS_PER_REQUEST, MAX_TOGGLE_CHILDREN,
+    MAX_RETRIES, RETRY_BASE_DELAY, NOTION_REQUEST_TIMEOUT,
+    SAMPLE_DIALOGUE_LIMIT, TRANSCRIPT_MAX_LENGTH, WHISPER_DEFAULT_MODEL,
+    DEFAULT_GEMINI_MODELS, FAST_GEMINI_MODELS, SUMMARY_GEMINI_MODELS,
+    MAX_JOB_AGE_HOURS, MAX_CANCELLED_JOBS,
+)
 
 
 class AudioProcessor:
@@ -148,6 +155,11 @@ class AudioProcessor:
             logging.error(f"❌ 使用OAuth憑證初始化Drive API失敗: {str(e)}")
             self.oauth_drive_service = None
             return False
+
+    def clear_credentials(self):
+        """清除OAuth憑證"""
+        self.oauth_drive_service = None
+        logging.info("🔄 OAuth Drive 服務憑證已清除")
 
     def download_file(self, file_id: str, target_dir: str) -> str: # Returns filename
         """從 Google Drive 下載檔案到指定的目標目錄 (使用服務帳號)"""
@@ -259,8 +271,10 @@ class AudioProcessor:
         names = folder_path.strip('/').split('/')
         parent_id = 'root'
         for name in names:
+            # 清理資料夾名稱中的特殊字元以避免查詢注入
+            safe_name = name.replace("'", "\\'").replace("\\", "\\\\")
             results = self.oauth_drive_service.files().list(
-                q=f"trashed = false and mimeType = 'application/vnd.google-apps.folder' and name = '{name}' and '{parent_id}' in parents",
+                q=f"trashed = false and mimeType = 'application/vnd.google-apps.folder' and name = '{safe_name}' and '{parent_id}' in parents",
                 spaces='drive',
                 fields="files(id, name)",
                 pageSize=10
@@ -330,14 +344,14 @@ class AudioProcessor:
             return False
         
     def format_timestamp(self, seconds: float) -> str:
-            """將秒數轉換為可讀時間戳記"""
-            minutes, seconds = divmod(int(seconds), 60)
-            hours, minutes = divmod(minutes, 60)
-            
-            if hours > 0:
-                return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-            else:
-                return f"{minutes:02d}:{seconds:02d}"
+        """將秒數轉換為可讀時間戳記"""
+        minutes, secs = divmod(int(seconds), 60)
+        hours, minutes = divmod(minutes, 60)
+
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        else:
+            return f"{minutes:02d}:{secs:02d}"
             
     def extract_date_from_filename(self, filename: str) -> Optional[str]:
         """從檔案名稱中提取日期，支援多種格式"""
@@ -437,8 +451,7 @@ class AudioProcessor:
         """
         # Default models list if none provided
         if models is None:
-            models = ['gemini-2.5-pro-exp-03-25', 'gemini-2.5-flash-preview-04-17',
-                        'gemini-1.5-pro', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite']
+            models = DEFAULT_GEMINI_MODELS
         
         response = None
         last_error = None
@@ -640,8 +653,6 @@ class AudioProcessor:
         })
         
         # Notion API 限制：每次請求最多 100 個區塊
-        MAX_BLOCKS_PER_REQUEST = 90  # 使用 90 作為安全界限
-        
         # 使用 NotionFormatter 來處理筆記
         note_blocks = self.notion_formatter.process_note_format_for_notion(comprehensive_notes)
         
@@ -728,9 +739,7 @@ class AudioProcessor:
             # 添加檔案連結到 remaining_note_blocks
             remaining_note_blocks.extend(audio_link_blocks)
             
-            # 計算每個 toggle 區塊最多可以包含的 transcript_blocks 數量 (最大100個)
-            MAX_TOGGLE_CHILDREN = 90  # 保留一些空間給其他元素
-            
+            # 計算每個 toggle 區塊最多可以包含的 transcript_blocks 數量
             # 分割 transcript_blocks 為多個 toggle 區塊
             for i in range(0, len(transcript_blocks), MAX_TOGGLE_CHILDREN):
                 toggle_children = []
@@ -781,7 +790,7 @@ class AudioProcessor:
             for i in range(0, len(remaining_note_blocks), MAX_BLOCKS_PER_REQUEST):
                 end_idx = min(i + MAX_BLOCKS_PER_REQUEST, len(remaining_note_blocks))
                 batch_num = i // MAX_BLOCKS_PER_REQUEST + 1
-                max_retries = 3
+                max_retries = MAX_RETRIES
                 retry_count = 0
                 
                 while retry_count < max_retries:
@@ -791,7 +800,7 @@ class AudioProcessor:
                             f"https://api.notion.com/v1/blocks/{page_id}/children",
                             headers=headers,
                             json={"children": remaining_note_blocks[i:end_idx]},
-                            timeout=30  # Add timeout to prevent hanging requests
+                            timeout=NOTION_REQUEST_TIMEOUT  # Add timeout to prevent hanging requests
                         )
                         
                         if transcript_blocks_response.status_code in [401, 403]:
@@ -799,7 +808,7 @@ class AudioProcessor:
                             try:
                                 error_details = transcript_blocks_response.json()
                                 logging.error(f"   詳細錯誤: {json.dumps(error_details, indent=2, ensure_ascii=False)}")
-                            except:
+                            except (ValueError, json.JSONDecodeError):
                                 logging.error(f"   回應內容: {transcript_blocks_response.text}")
                             break  # Authentication errors won't be fixed by retrying
                             
@@ -826,7 +835,7 @@ class AudioProcessor:
                                 logging.error(f"   響應內容 (非 JSON): {e.response.text}")
                         
                         if retry_count < max_retries:
-                            wait_time = 2 ** retry_count  # Exponential backoff
+                            wait_time = RETRY_BASE_DELAY ** retry_count  # Exponential backoff
                             logging.info(f"   等待 {wait_time} 秒後重試...")
                             time.sleep(wait_time)
                         else:
@@ -859,8 +868,8 @@ class AudioProcessor:
         # 載入 Whisper 模型 (如果尚未載入)
         if self.whisper_model is None:
             try:
-                logging.info("- 載入 Whisper 模型 (medium)...")
-                self.whisper_model = whisper.load_model("medium")
+                logging.info(f"- 載入 Whisper 模型 ({WHISPER_DEFAULT_MODEL})...")
+                self.whisper_model = whisper.load_model(WHISPER_DEFAULT_MODEL)
                 logging.info("✅ Whisper 模型載入成功")
             except Exception as e:
                 logging.error(f"❌ Whisper 模型載入失敗: {e}")
@@ -868,8 +877,7 @@ class AudioProcessor:
         
         # 載入 Pyannote 模型 (如果尚未載入)
         if self.diarization_pipeline is None:
-            # 增加重試機制
-            max_retries = 3
+            max_retries = MAX_RETRIES
             retry_count = 0
             last_error = None
             
@@ -939,7 +947,7 @@ class AudioProcessor:
         
         # 準備範例對話
         sample_dialogue = ""
-        for i, segment in enumerate(segments[:20]):  # 最多使用前 20 個段落
+        for i, segment in enumerate(segments[:SAMPLE_DIALOGUE_LIMIT]):  # 最多使用前 N 個段落
             speaker = segment["speaker"]
             text = segment["text"]
             sample_dialogue += f"{speaker}: {text}\n"
@@ -956,7 +964,7 @@ class AudioProcessor:
             response = self.try_multiple_gemini_models(
                 system_prompt,
                 f"對話內容如下：\n{sample_dialogue}\n\n請辨識出各個說話人代碼（如 {', '.join(original_speakers)}）對應的最可能真實姓名或職稱。",
-                models=['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite']
+                models=FAST_GEMINI_MODELS
             )
             
             response_text = response.text
@@ -1003,9 +1011,7 @@ class AudioProcessor:
             response = self.try_multiple_gemini_models(
                 system_prompt,
                 f"{context}以下是會議記錄：\n{transcript}",
-                models=
-                ['gemini-2.5-flash-preview-04-17',
-                        'gemini-1.5-pro', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite']
+                models=SUMMARY_GEMINI_MODELS
             )
             
             response_text = response.text
@@ -1143,12 +1149,16 @@ class AudioProcessor:
             }
             
             segments.append(segment_data)
+            transcript_full += f"{main_speaker}: {text}\n"
         
         logging.info(f"✅ 音檔處理完成，共 {len(segments)} 個段落")
         return transcript_full, segments, list(original_speakers)
 
     def create_job(self, job_id: str, file_id: str, attachment_file_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """創建一個新的處理任務"""
+        # 清理過期任務以防止記憶體無限增長
+        self.cleanup_old_jobs()
+
         job_data = {
             'id': job_id,
             'file_id': file_id,
@@ -1235,7 +1245,8 @@ class AudioProcessor:
                         return
                         
                     attachment_text, attachment_temp_dir = self.download_and_extract_text(attachment_file_id)
-                    attachment_texts.append(attachment_text)
+                    if attachment_text:
+                        attachment_texts.append(attachment_text)
                     if attachment_temp_dir:
                         attachments_temp_dir = attachment_temp_dir
                     
@@ -1496,7 +1507,7 @@ class AudioProcessor:
             if job_id in self.jobs:
                 self.jobs[job_id]['progress'] = progress
                 self.jobs[job_id]['message'] = message
-                self.jobs[job_id]['last_updated'] = datetime.utcnow().isoformat() + 'Z'
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
                 if status:
                     self.jobs[job_id]['status'] = status
                 if error:
@@ -1508,11 +1519,39 @@ class AudioProcessor:
                 
                 # 如果狀態是完成或失敗，記錄完成時間
                 if status in [JOB_STATUS['COMPLETED'], JOB_STATUS['FAILED']]:
-                    self.jobs[job_id]['completed_at'] = datetime.utcnow().isoformat() + 'Z'
+                    self.jobs[job_id]['completed_at'] = datetime.now().isoformat()
                     
                 logging.info(f"📊 工作進度更新 - ID: {job_id}, 狀態: {self.jobs[job_id]['status']}, 進度: {progress}%, 訊息: {message}")
             else:
                 logging.warning(f"⚠️ 嘗試更新不存在的工作 ID: {job_id}")
+
+    def cleanup_old_jobs(self):
+        """清理過期的已完成/失敗任務，防止記憶體無限增長"""
+        cutoff = datetime.now().timestamp() - (MAX_JOB_AGE_HOURS * 3600)
+        jobs_to_remove = []
+
+        with self.jobs_lock:
+            for job_id, job in self.jobs.items():
+                if job['status'] in [JOB_STATUS['COMPLETED'], JOB_STATUS['FAILED'], JOB_STATUS['CANCELLED']]:
+                    try:
+                        updated = datetime.fromisoformat(job['updated_at']).timestamp()
+                        if updated < cutoff:
+                            jobs_to_remove.append(job_id)
+                    except (ValueError, KeyError):
+                        pass
+
+            for job_id in jobs_to_remove:
+                del self.jobs[job_id]
+
+        # 同時清理 cancelled_jobs 集合
+        if len(self.cancelled_jobs) > MAX_CANCELLED_JOBS:
+            # 只保留仍然存在於 jobs 中的取消任務
+            with self.jobs_lock:
+                active_cancelled = self.cancelled_jobs & set(self.jobs.keys())
+            self.cancelled_jobs = active_cancelled
+
+        if jobs_to_remove:
+            logging.info(f"🧹 已清理 {len(jobs_to_remove)} 個過期任務")
 
     def shutdown_executor(self):
         """優雅地關閉 ThreadPoolExecutor"""
