@@ -149,6 +149,11 @@ class AudioProcessor:
             self.oauth_drive_service = None
             return False
 
+    def clear_credentials(self):
+        """清除OAuth憑證和相關的Drive服務"""
+        self.oauth_drive_service = None
+        logging.info("✅ OAuth憑證已清除")
+
     def download_file(self, file_id: str, target_dir: str) -> str: # Returns filename
         """從 Google Drive 下載檔案到指定的目標目錄 (使用服務帳號)"""
         logging.info(f"🔄 從 Google Drive 下載檔案 (ID: {file_id}) 到目錄 {target_dir}")
@@ -259,8 +264,9 @@ class AudioProcessor:
         names = folder_path.strip('/').split('/')
         parent_id = 'root'
         for name in names:
+            safe_name = name.replace("'", "\\'")
             results = self.oauth_drive_service.files().list(
-                q=f"trashed = false and mimeType = 'application/vnd.google-apps.folder' and name = '{name}' and '{parent_id}' in parents",
+                q=f"trashed = false and mimeType = 'application/vnd.google-apps.folder' and name = '{safe_name}' and '{parent_id}' in parents",
                 spaces='drive',
                 fields="files(id, name)",
                 pageSize=10
@@ -799,7 +805,7 @@ class AudioProcessor:
                             try:
                                 error_details = transcript_blocks_response.json()
                                 logging.error(f"   詳細錯誤: {json.dumps(error_details, indent=2, ensure_ascii=False)}")
-                            except:
+                            except Exception:
                                 logging.error(f"   回應內容: {transcript_blocks_response.text}")
                             break  # Authentication errors won't be fixed by retrying
                             
@@ -1235,7 +1241,8 @@ class AudioProcessor:
                         return
                         
                     attachment_text, attachment_temp_dir = self.download_and_extract_text(attachment_file_id)
-                    attachment_texts.append(attachment_text)
+                    if attachment_text:
+                        attachment_texts.append(attachment_text)
                     if attachment_temp_dir:
                         attachments_temp_dir = attachment_temp_dir
                     
@@ -1404,36 +1411,32 @@ class AudioProcessor:
 
     def _is_job_cancelled(self, job_id: str) -> bool:
         """檢查任務是否已被取消"""
-        return job_id in self.cancelled_jobs
+        with self.jobs_lock:
+            return job_id in self.cancelled_jobs
 
     def cancel_job(self, job_id: str) -> Dict[str, Any]:
         """取消指定的任務"""
         with self.jobs_lock:
             job = self.jobs.get(job_id)
-            
-        if not job:
-            # 詳細記錄所有現有任務ID用於調試
-            with self.jobs_lock:
+            if not job:
                 existing_jobs = list(self.jobs.keys())
-            logging.error(f"任務 {job_id} 不存在。現有任務: {existing_jobs}")
-            return {'success': False, 'error': '任務不存在'}
-        
-        current_status = job['status']
-        logging.info(f"任務 {job_id} 當前狀態: {current_status}")
-        
-        if current_status in ['completed', 'failed', 'cancelled']:
-            return {'success': False, 'error': f'任務已{current_status}，無法取消'}
-        
-        # 標記任務為已取消
-        self.cancelled_jobs.add(job_id)
-        
-        # 嘗試取消正在執行的 Future
-        with self.jobs_lock:
-            if job_id in self.jobs and 'future' in self.jobs[job_id]:
-                future = self.jobs[job_id]['future']
-                if future and not future.done():
-                    cancelled = future.cancel()
-                    logging.info(f"Future取消結果: {cancelled}")
+                logging.error(f"任務 {job_id} 不存在。現有任務: {existing_jobs}")
+                return {'success': False, 'error': '任務不存在'}
+            
+            current_status = job['status']
+            logging.info(f"任務 {job_id} 當前狀態: {current_status}")
+            
+            if current_status in [JOB_STATUS['COMPLETED'], JOB_STATUS['FAILED'], JOB_STATUS['CANCELLED']]:
+                return {'success': False, 'error': f'任務已{current_status}，無法取消'}
+            
+            # 標記任務為已取消
+            self.cancelled_jobs.add(job_id)
+            
+            # 嘗試取消正在執行的 Future
+            future = self.jobs[job_id].get('future')
+            if future and not future.done():
+                cancelled = future.cancel()
+                logging.info(f"Future取消結果: {cancelled}")
         
         # 直接更新任務狀態為已取消
         self._handle_job_cancellation(job_id)
@@ -1445,7 +1448,7 @@ class AudioProcessor:
         """處理任務取消"""
         with self.jobs_lock:
             if job_id in self.jobs:
-                self.jobs[job_id]['status'] = 'cancelled'
+                self.jobs[job_id]['status'] = JOB_STATUS['CANCELLED']
                 self.jobs[job_id]['progress'] = 100
                 self.jobs[job_id]['message'] = '任務已被使用者取消'
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
@@ -1460,14 +1463,12 @@ class AudioProcessor:
         """獲取工作狀態"""
         with self.jobs_lock:
             job = self.jobs.get(job_id)
-            
-        if not job:
-            # 詳細記錄調試信息
-            with self.jobs_lock:
-                existing_jobs = list(self.jobs.keys())
+            if not job:
                 total_jobs = len(self.jobs)
-            logging.warning(f"查詢不存在的任務 {job_id}。目前共有 {total_jobs} 個任務: {existing_jobs[:5]}{'...' if total_jobs > 5 else ''}")
-            return {'error': '工作不存在'}
+                existing_jobs = list(self.jobs.keys())[:5]
+                logging.warning(f"查詢不存在的任務 {job_id}。目前共有 {total_jobs} 個任務: {existing_jobs}{'...' if total_jobs > 5 else ''}")
+                return {'error': '工作不存在'}
+            job = job.copy()
         
         # 基本任務信息
         result = {
@@ -1496,7 +1497,7 @@ class AudioProcessor:
             if job_id in self.jobs:
                 self.jobs[job_id]['progress'] = progress
                 self.jobs[job_id]['message'] = message
-                self.jobs[job_id]['last_updated'] = datetime.utcnow().isoformat() + 'Z'
+                self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
                 if status:
                     self.jobs[job_id]['status'] = status
                 if error:
@@ -1508,7 +1509,7 @@ class AudioProcessor:
                 
                 # 如果狀態是完成或失敗，記錄完成時間
                 if status in [JOB_STATUS['COMPLETED'], JOB_STATUS['FAILED']]:
-                    self.jobs[job_id]['completed_at'] = datetime.utcnow().isoformat() + 'Z'
+                    self.jobs[job_id]['completed_at'] = datetime.now().isoformat()
                     
                 logging.info(f"📊 工作進度更新 - ID: {job_id}, 狀態: {self.jobs[job_id]['status']}, 進度: {progress}%, 訊息: {message}")
             else:

@@ -17,6 +17,36 @@ auth_bp = Blueprint('auth', __name__)
 # 初始化憑證管理器
 credential_manager = CredentialManager()
 
+def _get_client_secrets_path():
+    """獲取 OAuth client_secret.json 文件路徑"""
+    client_secrets_file = os.getenv("GOOGLE_CLIENT_SECRET_PATH",
+                          os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                          "credentials/client_secret.json"))
+    if not os.path.exists(client_secrets_file):
+        alt_path = "/app/credentials/client_secret.json"
+        if os.path.exists(alt_path):
+            client_secrets_file = alt_path
+            logging.info(f"✅ 找到替代 OAuth 配置路徑: {alt_path}")
+        else:
+            return None
+    return client_secrets_file
+
+def _build_redirect_uri():
+    """構建 OAuth 重定向 URI，自動處理本地/外部環境"""
+    redirect_uri = request.url_root.rstrip('/') + '/api/auth/callback'
+    if 'localhost' in redirect_uri or '0.0.0.0' in redirect_uri or '127.0.0.1' in redirect_uri:
+        external_url = os.getenv("EXTERNAL_URL")
+        if external_url:
+            redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
+        else:
+            default_uri = os.getenv("DEFAULT_REDIRECT_URI")
+            if default_uri:
+                redirect_uri = default_uri
+            else:
+                logging.warning("⚠️ EXTERNAL_URL 和 DEFAULT_REDIRECT_URI 均未設定，建議在環境變數中配置")
+                redirect_uri = "https://audio-processor.ddns.net/api/auth/callback"
+    return redirect_uri
+
 @auth_bp.route('/login')
 def login():
     """登入頁面"""
@@ -35,42 +65,15 @@ def auth_google():
     # 使用 OAuth 2.0 流程，從 client_secret.json 建立 OAuth 流程
     try:
         # 設定 OAuth 流程
-        client_secrets_file = os.getenv("GOOGLE_CLIENT_SECRET_PATH", 
-                              os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 
-                              "credentials/client_secret.json"))
-        
-        # 確認 client_secret.json 文件存在
-        if not os.path.exists(client_secrets_file):
-            logging.error(f"❌ 找不到 OAuth 配置文件: {client_secrets_file}")
-            # 嘗試替代路徑
-            alt_path = "/app/credentials/client_secret.json"
-            if os.path.exists(alt_path):
-                client_secrets_file = alt_path
-                logging.info(f"✅ 找到替代 OAuth 配置路徑: {alt_path}")
-            else:
-                return jsonify({
-                    'success': False,
-                    'error': '伺服器 OAuth 配置錯誤，找不到必要的憑證文件'
-                }), 500
+        client_secrets_file = _get_client_secrets_path()
+        if not client_secrets_file:
+            return jsonify({
+                'success': False,
+                'error': '伺服器 OAuth 配置錯誤，找不到必要的憑證文件'
+            }), 500
             
         # 使用公網可訪問的URL作為重定向地址
-        redirect_uri = request.url_root.rstrip('/') + '/api/auth/callback'
-        # 記錄原始重定向URI
-        logging.info(f"原始重定向URI: {redirect_uri}")
-        
-        # 檢查是否需要替換內部地址
-        if 'localhost' in redirect_uri or '0.0.0.0' in redirect_uri or '127.0.0.1' in redirect_uri:
-            # 嘗試獲取環境變數中設定的外部URL
-            external_url = os.getenv("EXTERNAL_URL")
-            if external_url:
-                redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
-                logging.info(f"使用環境變數設定的外部URL: {redirect_uri}")
-            else:
-                # 如果正在使用Docker內部地址且EXTERNAL_URL未設定，則使用預期的外部地址
-                # 這應該與 client_secret.json 和 Google Cloud Console 中的 URI 之一匹配。
-                redirect_uri = "https://audio-processor.ddns.net/api/auth/callback"
-                logging.info(f"使用硬編碼的預期外部URL: {redirect_uri}")
-            
+        redirect_uri = _build_redirect_uri()
         logging.info(f"🔄 OAuth 重定向 URI: {redirect_uri}")
         
         # 檢查client_secret.json文件內容
@@ -165,40 +168,15 @@ def auth_callback():
         return redirect(f'/login?error={error_msg}')
     
     try:
-        client_secrets_file = os.getenv("GOOGLE_CLIENT_SECRET_PATH", 
-                                     os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                                     "credentials/client_secret.json"))
-                                           
-        if not os.path.exists(client_secrets_file):
-            alt_path = "/app/credentials/client_secret.json"
-            if os.path.exists(alt_path):
-                client_secrets_file = alt_path
-                logging.info(f"✅ 找到替代 OAuth 配置路徑: {alt_path}")
-            else:
-                error_msg = '找不到 OAuth 配置文件'
-                logging.error(f"❌ OAuth 回調失敗: {error_msg}")
-                return redirect(f'/login?error={error_msg}')
+        client_secrets_file = _get_client_secrets_path()
+        if not client_secrets_file:
+            error_msg = '找不到 OAuth 配置文件'
+            logging.error(f"❌ OAuth 回調失敗: {error_msg}")
+            return redirect(f'/login?error={error_msg}')
         
         redirect_uri = session.get('redirect_uri')
         if not redirect_uri:
-            # 如果 session 中沒有 redirect_uri，則重新構造它
-            # 這段邏輯應該與 auth_google 中的邏輯保持一致
-            current_url_root = request.url_root # 獲取當前的根 URL
-            base_redirect_uri = current_url_root.rstrip('/') + '/api/auth/callback'
-            
-            if 'localhost' in base_redirect_uri or '0.0.0.0' in base_redirect_uri or '127.0.0.1' in base_redirect_uri:
-                external_url = os.getenv("EXTERNAL_URL")
-                if external_url:
-                    redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
-                    logging.info(f"回調中：使用環境變數EXTERNAL_URL設定的重定向URI: {redirect_uri}")
-                else:
-                    # 如果EXTERNAL_URL未設定，且是本地請求，則預設為預期的公開URI
-                    redirect_uri = "https://audio-processor.ddns.net/api/auth/callback"
-                    logging.info(f"回調中：使用硬編碼的預期外部URL: {redirect_uri}")
-            else:
-                # 如果不是本地請求，則直接使用基於請求的URL
-                redirect_uri = base_redirect_uri
-                logging.info(f"回調中：使用基於請求的重定向URI: {redirect_uri}")
+            redirect_uri = _build_redirect_uri()
         
         logging.info(f"🔄 重建 OAuth 流程，使用重定向 URI: {redirect_uri}")
         
@@ -353,31 +331,14 @@ def auth_token():
             return jsonify({'success': False, 'error': 'No authorization code provided'})
             
         # 設定 OAuth 流程
-        client_secrets_file = os.getenv("GOOGLE_CLIENT_SECRET_PATH", 
-                            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 
-                            "credentials/client_secret.json"))
-        
-        # 確認 client_secret.json 文件存在
-        if not os.path.exists(client_secrets_file):
-            alt_path = "/app/credentials/client_secret.json"
-            if os.path.exists(alt_path):
-                client_secrets_file = alt_path
-                logging.info(f"✅ 找到替代 OAuth 配置路徑: {alt_path}")
-            else:
-                return jsonify({'success': False, 'error': '找不到 OAuth 配置文件'})
+        client_secrets_file = _get_client_secrets_path()
+        if not client_secrets_file:
+            return jsonify({'success': False, 'error': '找不到 OAuth 配置文件'})
         
         # 構建重定向URI
         redirect_uri = session.get('redirect_uri')
         if not redirect_uri:
-            # 使用默認值
-            redirect_uri = request.url_root.rstrip('/') + '/api/auth/callback'
-            # 檢查是否需要替換內部地址
-            if 'localhost' in redirect_uri or '0.0.0.0' in redirect_uri or '127.0.0.1' in redirect_uri:
-                external_url = os.getenv("EXTERNAL_URL")
-                if external_url:
-                    redirect_uri = external_url.rstrip('/') + '/api/auth/callback'
-                else:
-                    redirect_uri = "http://localhost:5000/api/auth/callback"
+            redirect_uri = _build_redirect_uri()
         
         # 從session獲取狀態
         state = session.get('flow_state')
