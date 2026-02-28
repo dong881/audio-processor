@@ -38,7 +38,7 @@ def create_app():
         user_info = session.get('user_info', {})
         user_id = user_info.get('id')
         
-        if user_id and user_id != 'unknown':
+        if user_id and user_id != 'unknown' and not user_id.startswith('temp_') and user_id != 'error_user':
             try:
                 valid_credentials = credential_manager.get_valid_credentials(user_id)
                 if valid_credentials:

@@ -13,6 +13,9 @@ def health_check():
     """健康檢查端點"""
     from main import processor
     
+    if processor is None:
+        return jsonify({"status": "unhealthy", "error": "Processor not initialized"}), 503
+    
     # Create a consistent snapshot of jobs while holding the lock
     with processor.jobs_lock:
         # Create a full copy of the jobs dictionary to ensure a consistent snapshot
@@ -35,6 +38,9 @@ def health_check():
 def process_audio_endpoint():
     """非同步處理音檔的 API 端點，立即返回工作 ID"""
     from main import processor
+    
+    if processor is None:
+        return jsonify({"success": False, "error": "服務未就緒"}), 503
     
     try:
         data = request.get_json()

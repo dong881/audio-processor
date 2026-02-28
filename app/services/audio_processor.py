@@ -801,7 +801,7 @@ class AudioProcessor:
                             try:
                                 error_details = transcript_blocks_response.json()
                                 logging.error(f"   詳細錯誤: {json.dumps(error_details, indent=2, ensure_ascii=False)}")
-                            except:
+                            except (ValueError, json.JSONDecodeError):
                                 logging.error(f"   回應內容: {transcript_blocks_response.text}")
                             break  # Authentication errors won't be fixed by retrying
                             
@@ -963,7 +963,7 @@ class AudioProcessor:
             
             response_text = response.text
             # 有時 Gemini 會在 JSON 前後加上額外文字，需要提取純 JSON 部分
-            json_match = re.search(r'({.*?})', response_text, re.DOTALL)
+            json_match = re.search(r'(\{[^{}]*\})', response_text, re.DOTALL)
             if json_match:
                 response_text = json_match.group(1)
             
@@ -1011,10 +1011,17 @@ class AudioProcessor:
             )
             
             response_text = response.text
-            # 提取 JSON 部分
-            json_match = re.search(r'({.*?})', response_text, re.DOTALL)
-            if json_match:
-                response_text = json_match.group(1)
+            # 提取 JSON 部分 - 支援巢狀結構（如陣列）
+            # 先嘗試找到 ```json ``` 代碼塊
+            code_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+            if code_block_match:
+                response_text = code_block_match.group(1)
+            else:
+                # 嘗試匹配最外層的花括號（支援巢狀）
+                brace_start = response_text.find('{')
+                brace_end = response_text.rfind('}')
+                if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
+                    response_text = response_text[brace_start:brace_end + 1]
             
             # 解析 JSON 回應
             summary_data = json.loads(response_text)
