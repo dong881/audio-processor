@@ -6,6 +6,9 @@ from datetime import datetime, timedelta
 from google.oauth2.credentials import Credentials
 import google.auth.transport.requests
 from typing import Optional, Dict, Any
+from app.utils.constants import (
+    REDIS_CREDENTIAL_EXPIRY_DAYS, REDIS_CONNECT_TIMEOUT, REDIS_SOCKET_TIMEOUT,
+)
 
 class CredentialManager:
     """憑證管理器，負責 OAuth 憑證的持久化存儲和刷新"""
@@ -26,8 +29,8 @@ class CredentialManager:
                 port=redis_port,
                 db=redis_db,
                 decode_responses=True,
-                socket_connect_timeout=5,
-                socket_timeout=5
+                socket_connect_timeout=REDIS_CONNECT_TIMEOUT,
+                socket_timeout=REDIS_SOCKET_TIMEOUT
             )
             
             # 測試連接
@@ -62,11 +65,11 @@ class CredentialManager:
                 'saved_at': datetime.now().isoformat()
             }
             
-            # 存儲到 Redis，設置過期時間為 30 天
+            # 存儲到 Redis，設置過期時間
             key = self._get_credential_key(user_id)
             self.redis_client.setex(
                 key, 
-                timedelta(days=30), 
+                timedelta(days=REDIS_CREDENTIAL_EXPIRY_DAYS), 
                 json.dumps(cred_data)
             )
             

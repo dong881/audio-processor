@@ -13,14 +13,11 @@ google-auth>=2.22.0
 google-generativeai>=0.3.1
 
 # Audio processing
-whisper>=1.1.10
+openai-whisper
 pyannote.audio>=2.1.1
 PyPDF2>=3.0.1
 
-# NEW: Audio preprocessing dependencies
+# Audio preprocessing dependencies
 numpy>=1.23.5
 librosa>=0.10.1
 soundfile>=0.12.1
-
-openai-whisper
-# Add any other dependencies here

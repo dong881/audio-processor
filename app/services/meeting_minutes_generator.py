@@ -3,6 +3,7 @@
 生成標準化的會議紀錄模板，供LLM使用
 """
 
+import re
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
@@ -169,7 +170,7 @@ Key points discussed:
                     # 解析ISO格式時間
                     dt = datetime.fromisoformat(modified_time.replace('Z', '+00:00'))
                     date = dt.strftime("%Y-%m-%d")
-                except:
+                except (ValueError, TypeError):
                     date = None
             else:
                 date = None
@@ -201,7 +202,6 @@ Key points discussed:
             name_without_ext = file_name.rsplit('.', 1)[0]
             
             # 移除常見的日期時間格式
-            import re
             
             # 移除 YYYY-MM-DD 格式
             name_without_ext = re.sub(r'\d{4}-\d{2}-\d{2}', '', name_without_ext)

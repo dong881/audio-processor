@@ -1,17 +1,32 @@
 import os
 import uuid
 import logging
+import re
 from datetime import datetime
 from flask import Blueprint, request, jsonify, session, current_app
 from app.utils.constants import JOB_STATUS
 
+# UUID 驗證正則表達式
+_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+
 # 建立藍圖
 api_bp = Blueprint('api', __name__)
+
+
+def _get_processor():
+    """取得全域 AudioProcessor 實例"""
+    processor = _get_processor()
+    return processor
+
+
+def _is_valid_uuid(value: str) -> bool:
+    """驗證字串是否為有效的 UUID 格式"""
+    return bool(_UUID_RE.match(value))
 
 @api_bp.route('/health', methods=['GET'])
 def health_check():
     """健康檢查端點"""
-    from main import processor
+    processor = _get_processor()
     
     # Create a consistent snapshot of jobs while holding the lock
     with processor.jobs_lock:
@@ -34,7 +49,7 @@ def health_check():
 @api_bp.route('/process', methods=['POST'])
 def process_audio_endpoint():
     """非同步處理音檔的 API 端點，立即返回工作 ID"""
-    from main import processor
+    processor = _get_processor()
     
     try:
         data = request.get_json()
@@ -73,12 +88,14 @@ def process_audio_endpoint():
 
     except Exception as e:
         logging.error(f"API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/job/<job_id>', methods=['GET'])
 def get_job_status_endpoint(job_id):
     """獲取工作狀態的 API 端點"""
-    from main import processor
+    if not _is_valid_uuid(job_id):
+        return jsonify({"success": False, "error": "無效的工作 ID 格式"}), 400
+    processor = _get_processor()
     
     try:
         logging.debug(f"Getting job status for job_id: {job_id}")
@@ -99,77 +116,44 @@ def get_job_status_endpoint(job_id):
         
     except Exception as e:
         logging.error(f"API 錯誤 for job {job_id}: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/jobs', methods=['GET'])
 def get_active_jobs_endpoint():
     """獲取工作列表的 API 端點，可選擇性過濾狀態"""
-    from main import processor
+    processor = _get_processor()
     
     try:
         # Get filter status from query parameter, default to show only active jobs
         filter_status = request.args.get('filter', 'active')
         
+        # 定義有效的過濾器及其對應的狀態
+        valid_filters = {
+            'all': None,
+            'active': [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']],
+            'completed': [JOB_STATUS['COMPLETED']],
+            'failed': [JOB_STATUS['FAILED']],
+        }
+        
+        if filter_status not in valid_filters:
+            return jsonify({"success": False, "error": "Invalid filter parameter. Use 'active', 'all', 'completed', or 'failed'"}), 400
+        
         # Create a consistent snapshot of jobs while holding the lock
         with processor.jobs_lock:
-            # First create a snapshot of all jobs while holding the lock
             all_jobs = {job_id: job.copy() for job_id, job in processor.jobs.items()}
         
-        # Process the jobs data outside the lock to minimize lock contention
-        if filter_status == 'all':
-            # Return all jobs regardless of status
-            jobs_to_return = {
-                job_id: {
+        # 根據過濾器篩選並提取摘要欄位
+        allowed_statuses = valid_filters[filter_status]
+        jobs_to_return = {}
+        for job_id, job in all_jobs.items():
+            if allowed_statuses is None or job['status'] in allowed_statuses:
+                jobs_to_return[job_id] = {
                     'id': job['id'],
                     'status': job['status'],
                     'progress': job['progress'],
                     'created_at': job['created_at'],
-                    'updated_at': job['updated_at']
+                    'updated_at': job['updated_at'],
                 }
-                for job_id, job in all_jobs.items()
-            }
-        elif filter_status == 'active':
-            # Return only pending or processing jobs
-            jobs_to_return = {
-                job_id: {
-                    'id': job['id'],
-                    'status': job['status'],
-                    'progress': job['progress'],
-                    'created_at': job['created_at'],
-                    'updated_at': job['updated_at']
-                }
-                for job_id, job in all_jobs.items()
-                if job['status'] in [JOB_STATUS['PENDING'], JOB_STATUS['PROCESSING']]
-            }
-        elif filter_status == 'completed':
-            # Return only completed jobs
-            jobs_to_return = {
-                job_id: {
-                    'id': job['id'],
-                    'status': job['status'],
-                    'progress': job['progress'],
-                    'created_at': job['created_at'],
-                    'updated_at': job['updated_at']
-                }
-                for job_id, job in all_jobs.items()
-                if job['status'] == JOB_STATUS['COMPLETED']
-            }
-        elif filter_status == 'failed':
-            # Return only failed jobs
-            jobs_to_return = {
-                job_id: {
-                    'id': job['id'],
-                    'status': job['status'],
-                    'progress': job['progress'],
-                    'created_at': job['created_at'],
-                    'updated_at': job['updated_at']
-                }
-                for job_id, job in all_jobs.items()
-                if job['status'] == JOB_STATUS['FAILED']
-            }
-        else:
-            # Invalid filter value
-            return jsonify({"success": False, "error": "Invalid filter parameter. Use 'active', 'all', 'completed', or 'failed'"}), 400
             
         # Add job count information
         result = {
@@ -186,12 +170,12 @@ def get_active_jobs_endpoint():
         
     except Exception as e:
         logging.error(f"API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/drive/files')
 def drive_files():
     """獲取Google Drive檔案列表"""
-    from main import processor
+    processor = _get_processor()
     
     if not session.get('authenticated', False):
         return jsonify({'success': False, 'error': 'Not authenticated'}), 401
@@ -296,7 +280,9 @@ def drive_files():
 @api_bp.route('/job/<job_id>/cancel', methods=['POST'])
 def cancel_job_endpoint(job_id):
     """取消指定任務的 API 端點"""
-    from main import processor
+    if not _is_valid_uuid(job_id):
+        return jsonify({"success": False, "error": "無效的工作 ID 格式"}), 400
+    processor = _get_processor()
     
     try:
         logging.info(f"嘗試取消任務: {job_id}")
@@ -330,7 +316,7 @@ def cancel_job_endpoint(job_id):
 @api_bp.route('/jobs/status/batch', methods=['POST'])
 def get_batch_job_status_endpoint():
     """批量獲取任務狀態的 API 端點"""
-    from main import processor
+    processor = _get_processor()
     
     try:
         data = request.get_json()
@@ -355,12 +341,14 @@ def get_batch_job_status_endpoint():
         
     except Exception as e:
         logging.error(f"批量獲取任務狀態 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/jobs/<job_id>/result', methods=['GET'])
 def get_job_result_endpoint(job_id):
     """獲取任務結果的 API 端點"""
-    from main import processor
+    if not _is_valid_uuid(job_id):
+        return jsonify({"success": False, "error": "無效的工作 ID 格式"}), 400
+    processor = _get_processor()
     
     try:
         logging.debug(f"Getting job result for job_id: {job_id}")
@@ -388,12 +376,15 @@ def get_job_result_endpoint(job_id):
         
     except Exception as e:
         logging.error(f"獲取任務結果 API 錯誤 for job {job_id}: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/jobs/debug', methods=['GET'])
 def debug_jobs_endpoint():
     """調試端點：列出所有任務ID (僅用於開發階段)"""
-    from main import processor
+    # 僅在開發模式下允許存取
+    if not os.getenv('FLASK_DEBUG', 'false').lower() == 'true':
+        return jsonify({"success": False, "error": "此端點僅在開發模式下可用"}), 403
+    processor = _get_processor()
     
     try:
         with processor.jobs_lock:
@@ -415,7 +406,7 @@ def debug_jobs_endpoint():
         
     except Exception as e:
         logging.error(f"調試端點錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/meeting-minutes/template', methods=['POST'])
 def generate_meeting_minutes_template():
@@ -473,7 +464,7 @@ def generate_meeting_minutes_template():
         
     except Exception as e:
         logging.error(f"生成會議紀錄模板 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/meeting-minutes/template/from-audio', methods=['POST'])
 def generate_template_from_audio():
@@ -509,7 +500,7 @@ def generate_template_from_audio():
         
     except Exception as e:
         logging.error(f"從音頻生成會議紀錄模板 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
 
 @api_bp.route('/meeting-minutes/template/variants', methods=['GET'])
 def get_template_variants():
@@ -527,4 +518,4 @@ def get_template_variants():
         
     except Exception as e:
         logging.error(f"獲取模板變體 API 錯誤: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"伺服器內部錯誤: {e}"}), 500
+        return jsonify({"success": False, "error": "伺服器內部錯誤"}), 500
